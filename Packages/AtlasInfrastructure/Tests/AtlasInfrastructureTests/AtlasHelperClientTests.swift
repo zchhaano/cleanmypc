@@ -9,8 +9,9 @@ final class AtlasHelperClientTests: XCTestCase {
         try script.write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
 
+        defer { try? FileManager.default.removeItem(at: scriptURL) }
         let client = AtlasPrivilegedHelperClient(executableURL: scriptURL)
-        let result = try await client.perform(AtlasHelperAction(kind: .trashItems, targetPath: "/Applications/Sample.app"))
+        let result = try await client.perform(AtlasHelperAction(id: UUID(uuidString: "00000000-0000-0000-0000-000000000111")!, kind: .trashItems, targetPath: "/Applications/Sample.app"))
 
         XCTAssertTrue(result.success)
         XCTAssertEqual(result.message, "ok")

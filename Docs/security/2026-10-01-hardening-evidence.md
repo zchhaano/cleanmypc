@@ -43,3 +43,9 @@ Ruling: permit only macOS's fixed /var, /tmp and /etc aliases in the descriptor 
 - Default server-side native file mutations (including restore) are closed, independently of UI or environment settings. They remain closed pending the journal/recovery/Helper acceptance closure and VM evidence.
 - Smart Clean now accumulates mappings immediately at each successful file. Removed legacy same-name restore success inference; legacy restore uses no-replace FileSafety mover.
 - Actual targeted verification: registry 4, mutation default-closure 1, protocol 5; scanner limit suite 29. `N2-integration.log` and `N2-final.log` in isolated worktree logs. This does not establish crash durability or reopen production writes.
+
+## R1 bounded process lifecycle
+
+Shared runner uses an owned posix_spawn process group, nonblocking stdin and simultaneous bounded stdout/stderr drains, monotonic deadlines, TERM then KILL, cancellation, and one continuation owner. Helper/Health/scan use 30/15/120 seconds, 1 second grace, 8/1 MiB limits. A child retaining pipes is bounded by the original deadline. Descendants deliberately escaping the process group are outside the guarantee. Scan scratch is removed on every return/error.
+
+Actual regression result: 6 process runner cases, 1 Helper client case, 21 adapter cases pass (`R1-integrated.log`). Normal exit/input, full simultaneous pipes, input refusal, ignored TERM, held descendant pipe, cancellation and per-stream output overflow exercised in isolated child processes. Helper client rejects responses whose complete action differs; Release ignores executable/repository environment overrides.

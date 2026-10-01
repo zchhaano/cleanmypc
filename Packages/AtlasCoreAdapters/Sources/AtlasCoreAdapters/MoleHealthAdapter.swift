@@ -1,6 +1,7 @@
 import AtlasApplication
 import AtlasDomain
 import Foundation
+import AtlasProcessSupport
 
 public struct MoleHealthAdapter: AtlasHealthSnapshotProviding {
     private let scriptURL: URL
@@ -11,31 +12,18 @@ public struct MoleHealthAdapter: AtlasHealthSnapshotProviding {
     }
 
     public func collectHealthSnapshot() async throws -> AtlasHealthSnapshot {
-        let output = try runHealthScript()
+        let output = try await runHealthScript()
         let payload = try decoder.decode(HealthJSONPayload.self, from: output)
         return payload.atlasSnapshot
     }
 
-    private func runHealthScript() throws -> Data {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = [scriptURL.path]
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        try process.run()
-        process.waitUntilExit()
-
-        let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
-        guard process.terminationStatus == 0 else {
-            let message = String(data: errorData, encoding: .utf8) ?? "unknown error"
-            throw MoleHealthAdapterError.commandFailed(message)
+    private func runHealthScript() async throws -> Data {
+        let result = try await AtlasProcessRunner().run(.init(executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [scriptURL.path], timeout: .seconds(15)))
+        guard result.exitStatus == 0 else {
+            throw MoleHealthAdapterError.commandFailed(String(data: result.stderr, encoding: .utf8) ?? "unknown error")
         }
-
-        return stdout.fileHandleForReading.readDataToEndOfFile()
+        return result.stdout
     }
 
     private static var defaultScriptURL: URL {

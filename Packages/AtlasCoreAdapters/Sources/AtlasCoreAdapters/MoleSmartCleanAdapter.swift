@@ -1,6 +1,6 @@
 import AtlasApplication
 import AtlasDomain
-import Dispatch
+import AtlasProcessSupport
 import Foundation
 
 public struct MoleSmartCleanAdapter: AtlasSmartCleanScanProviding {
@@ -22,9 +22,10 @@ public struct MoleSmartCleanAdapter: AtlasSmartCleanScanProviding {
             .appendingPathComponent("atlas-smart-clean-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
 
+        defer { try? FileManager.default.removeItem(at: stateDirectory) }
         let exportFileURL = stateDirectory.appendingPathComponent("clean-list.txt")
         let detailedExportFileURL = stateDirectory.appendingPathComponent("clean-list-detailed.tsv")
-        let output = try runDryRun(stateDirectory: stateDirectory, exportFileURL: exportFileURL, detailedExportFileURL: detailedExportFileURL)
+        let output = try await runDryRun(stateDirectory: stateDirectory, exportFileURL: exportFileURL, detailedExportFileURL: detailedExportFileURL)
         var findings = Self.parseDetailedFindings(from: detailedExportFileURL).isEmpty
             ? Self.parseFindings(from: output)
             : Self.parseDetailedFindings(from: detailedExportFileURL)
@@ -37,55 +38,21 @@ public struct MoleSmartCleanAdapter: AtlasSmartCleanScanProviding {
         return AtlasSmartCleanScanResult(findings: findings, summary: summary)
     }
 
-    private func runDryRun(stateDirectory: URL, exportFileURL: URL, detailedExportFileURL: URL) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = [cleanScriptURL.path, "--dry-run"]
-
+    private func runDryRun(stateDirectory: URL, exportFileURL: URL, detailedExportFileURL: URL) async throws -> String {
         var environment = ProcessInfo.processInfo.environment
         environment["MO_NO_OPLOG"] = "1"
         environment["MOLE_STATE_DIR"] = stateDirectory.path
         environment["MOLE_EXPORT_LIST_FILE"] = exportFileURL.path
         environment["MOLE_DETAILED_EXPORT_FILE"] = detailedExportFileURL.path
-        process.environment = environment
-
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-
-        try process.run()
-
-        // 超时保护（bug limited-mode-scan-hang）：受限模式/大库下 clean.sh dry-run
-        // 可能很慢甚至卡住。超时终止子进程并抛错，避免 waitUntilExit 无限等待。
-        let timeoutSource = DispatchSource.makeTimerSource()
-        var didTimeout = false
-        timeoutSource.schedule(deadline: .now() + scanTimeoutSeconds)
-        timeoutSource.setEventHandler {
-            if process.isRunning {
-                didTimeout = true
-                process.terminate()
-            }
+        let result: AtlasProcessResult
+        do {
+            result = try await AtlasProcessRunner().run(.init(executableURL: URL(fileURLWithPath: "/bin/bash"),
+                arguments: [cleanScriptURL.path, "--dry-run"], environment: environment, timeout: .seconds(scanTimeoutSeconds)))
+        } catch AtlasProcessError.timedOut { throw MoleSmartCleanAdapterError.scanTimeout(seconds: Int(scanTimeoutSeconds)) }
+        guard result.exitStatus == 0 else {
+            throw MoleSmartCleanAdapterError.commandFailed(String(data: result.stderr, encoding: .utf8) ?? "unknown error")
         }
-        timeoutSource.resume()
-
-        process.waitUntilExit()
-        timeoutSource.cancel()
-
-        if didTimeout {
-            throw MoleSmartCleanAdapterError.scanTimeout(seconds: Int(scanTimeoutSeconds))
-        }
-
-        let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: outputData, encoding: .utf8) ?? ""
-
-        guard process.terminationStatus == 0 else {
-            let message = String(data: errorData, encoding: .utf8) ?? "unknown error"
-            throw MoleSmartCleanAdapterError.commandFailed(message)
-        }
-
-        return output
+        return String(data: result.stdout, encoding: .utf8) ?? ""
     }
 
     static func parseDetailedFindings(from exportFileURL: URL) -> [Finding] {

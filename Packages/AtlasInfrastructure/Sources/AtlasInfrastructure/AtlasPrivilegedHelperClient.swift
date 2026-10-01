@@ -1,5 +1,6 @@
 import AtlasProtocol
 import Foundation
+import AtlasProcessSupport
 
 public protocol AtlasPrivilegedActionExecuting: Sendable {
     func perform(_ action: AtlasHelperAction) async throws -> AtlasHelperActionResult
@@ -50,55 +51,20 @@ public actor AtlasPrivilegedHelperClient: AtlasPrivilegedActionExecuting {
             throw AtlasHelperClientError.encodingFailed(error.localizedDescription)
         }
 
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = ["--action-json"]
-
-        let stdinPipe = Pipe()
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardInput = stdinPipe
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        try process.run()
-        stdinPipe.fileHandleForWriting.write(requestData)
-        stdinPipe.fileHandleForWriting.closeFile()
-
-        let timedOut = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                // True if the process terminates before timeout
-                await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-                    process.terminationHandler = { _ in
-                        continuation.resume(returning: true)
-                    }
-                }
-            }
-            group.addTask {
-                // False if timeout fires first
-                try? await Task.sleep(nanoseconds: UInt64(self.timeoutSeconds * 1_000_000_000))
-                return false
-            }
-            let first = await group.next()!
-            group.cancelAll()
-            return !first
-        }
-
-        if timedOut {
-            process.terminate()
-            throw AtlasHelperClientError.invocationFailed("Helper process timed out after \(Int(timeoutSeconds))s")
-        }
-
-        let outputData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
-        guard process.terminationStatus == 0 else {
-            let errorMessage = String(data: errorData, encoding: .utf8) ?? "unknown helper error"
-            throw AtlasHelperClientError.invocationFailed(errorMessage)
+        let result: AtlasProcessResult
+        do {
+            result = try await AtlasProcessRunner().run(.init(executableURL: executableURL, arguments: ["--action-json"],
+                stdin: requestData, timeout: .seconds(timeoutSeconds)))
+        } catch { throw AtlasHelperClientError.invocationFailed(String(describing: error)) }
+        let outputData = result.stdout
+        guard result.exitStatus == 0 else {
+            throw AtlasHelperClientError.invocationFailed(String(data: result.stderr, encoding: .utf8) ?? "unknown helper error")
         }
 
         do {
-            return try decoder.decode(AtlasHelperActionResult.self, from: outputData)
+            let response = try decoder.decode(AtlasHelperActionResult.self, from: outputData)
+            guard response.action == action else { throw AtlasHelperClientError.decodingFailed("Helper response does not match request evidence") }
+            return response
         } catch {
             let raw = String(data: outputData, encoding: .utf8) ?? "<empty>"
             throw AtlasHelperClientError.decodingFailed("\(error.localizedDescription). Output: \(raw)")
@@ -115,6 +81,7 @@ public actor AtlasPrivilegedHelperClient: AtlasPrivilegedActionExecuting {
             }
         }
 
+        #if DEBUG
         if let environmentPath = ProcessInfo.processInfo.environment["ATLAS_HELPER_EXECUTABLE"] {
             attemptedPaths.append(environmentPath)
             if FileManager.default.isExecutableFile(atPath: environmentPath) {
@@ -122,12 +89,14 @@ public actor AtlasPrivilegedHelperClient: AtlasPrivilegedActionExecuting {
             }
         }
 
+        #endif
         let bundleCandidates = bundledHelperCandidates()
         attemptedPaths.append(contentsOf: bundleCandidates.map(\.path))
         for candidate in bundleCandidates where FileManager.default.isExecutableFile(atPath: candidate.path) {
             return (candidate, attemptedPaths)
         }
 
+        #if DEBUG
         let devCandidates: [URL] = {
             guard let repoRoot = ProcessInfo.processInfo.environment["ATLAS_REPO_ROOT"] else {
                 return []
@@ -144,6 +113,7 @@ public actor AtlasPrivilegedHelperClient: AtlasPrivilegedActionExecuting {
             return (candidate, attemptedPaths)
         }
 
+        #endif
         return (nil, attemptedPaths)
     }
 
