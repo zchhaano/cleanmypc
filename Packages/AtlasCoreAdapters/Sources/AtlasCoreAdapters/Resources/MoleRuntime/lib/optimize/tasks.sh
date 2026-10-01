@@ -19,18 +19,8 @@ opt_msg() {
 }
 
 run_launchctl_unload() {
-    local plist_file="$1"
-    local need_sudo="${2:-false}"
-
-    if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
-        return 0
-    fi
-
-    if [[ "$need_sudo" == "true" ]]; then
-        sudo launchctl unload "$plist_file" 2> /dev/null || true
-    else
-        launchctl unload "$plist_file" 2> /dev/null || true
-    fi
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
 needs_permissions_repair() {
@@ -542,174 +532,20 @@ opt_memory_pressure_relief() {
 
 # Network stack reset (route + ARP).
 opt_network_stack_optimize() {
-    local route_flushed="false"
-    local arp_flushed="false"
-
-    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
-        local route_ok=true
-        local dns_ok=true
-
-        if ! route -n get default > /dev/null 2>&1; then
-            route_ok=false
-        fi
-        if ! dscacheutil -q host -a name "example.com" > /dev/null 2>&1; then
-            dns_ok=false
-        fi
-
-        if [[ "$route_ok" == "true" && "$dns_ok" == "true" ]]; then
-            opt_msg "Network stack already optimal"
-            return 0
-        fi
-
-        if sudo route -n flush > /dev/null 2>&1; then
-            route_flushed="true"
-        fi
-
-        if sudo arp -a -d > /dev/null 2>&1; then
-            arp_flushed="true"
-        fi
-    else
-        route_flushed="true"
-        arp_flushed="true"
-    fi
-
-    if [[ "$route_flushed" == "true" ]]; then
-        opt_msg "Network routing table refreshed"
-    fi
-    if [[ "$arp_flushed" == "true" ]]; then
-        opt_msg "ARP cache cleared"
-    else
-        if [[ "$route_flushed" == "true" ]]; then
-            return 0
-        fi
-        echo -e "  ${YELLOW}${ICON_WARNING}${NC} Failed to optimize network stack"
-    fi
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
 # User directory permissions repair.
 opt_disk_permissions_repair() {
-    if [[ "${MO_DEBUG:-}" == "1" ]]; then
-        debug_operation_start "Disk Permissions Repair" "Reset user directory permissions"
-        debug_operation_detail "Method" "Run diskutil resetUserPermissions on user home directory"
-        debug_operation_detail "Condition" "Only runs if permissions issues are detected"
-        debug_operation_detail "Expected outcome" "Fixed file access issues, correct ownership"
-        debug_risk_level "MEDIUM" "Requires sudo, modifies permissions"
-    fi
-
-    local user_id
-    user_id=$(id -u)
-
-    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
-        if ! needs_permissions_repair; then
-            opt_msg "User directory permissions already optimal"
-            return 0
-        fi
-
-        if [[ -t 1 ]]; then
-            start_inline_spinner "Repairing disk permissions..."
-        fi
-
-        local success=false
-        if sudo diskutil resetUserPermissions / "$user_id" > /dev/null 2>&1; then
-            success=true
-        fi
-
-        if [[ -t 1 ]]; then
-            stop_inline_spinner
-        fi
-
-        if [[ "$success" == "true" ]]; then
-            opt_msg "User directory permissions repaired"
-            opt_msg "File access issues resolved"
-        else
-            echo -e "  ${YELLOW}${ICON_WARNING}${NC} Failed to repair permissions, may not be needed"
-        fi
-    else
-        opt_msg "User directory permissions repaired"
-        opt_msg "File access issues resolved"
-    fi
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
 # Bluetooth reset (skip if HID/audio active).
 opt_bluetooth_reset() {
-    if [[ "${MO_DEBUG:-}" == "1" ]]; then
-        debug_operation_start "Bluetooth Reset" "Restart Bluetooth daemon"
-        debug_operation_detail "Method" "Kill bluetoothd daemon (auto-restarts)"
-        debug_operation_detail "Safety" "Skips if active Bluetooth keyboard/mouse/audio detected"
-        debug_operation_detail "Expected outcome" "Fixed Bluetooth connectivity issues"
-        debug_risk_level "LOW" "Daemon auto-restarts, connections auto-reconnect"
-    fi
-
-    local spinner_started="false"
-    if [[ -t 1 ]]; then
-        MOLE_SPINNER_PREFIX="  " start_inline_spinner "Checking Bluetooth..."
-        spinner_started="true"
-    fi
-
-    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
-        if has_bluetooth_hid_connected; then
-            if [[ "$spinner_started" == "true" ]]; then
-                stop_inline_spinner
-            fi
-            opt_msg "Bluetooth already optimal"
-            return 0
-        fi
-
-        local bt_audio_active=false
-
-        local audio_info
-        audio_info=$(system_profiler SPAudioDataType 2> /dev/null || echo "")
-
-        local default_output
-        default_output=$(echo "$audio_info" | awk '/Default Output Device: Yes/,/^$/' 2> /dev/null || echo "")
-
-        if echo "$default_output" | grep -qi "Transport:.*Bluetooth"; then
-            bt_audio_active=true
-        fi
-
-        if [[ "$bt_audio_active" == "false" ]]; then
-            if system_profiler SPBluetoothDataType 2> /dev/null | grep -q "Connected: Yes"; then
-                local -a media_apps=("Music" "Spotify" "VLC" "QuickTime Player" "TV" "Podcasts" "Safari" "Google Chrome" "Chrome" "Firefox" "Arc" "IINA" "mpv")
-                for app in "${media_apps[@]}"; do
-                    if pgrep -x "$app" > /dev/null 2>&1; then
-                        bt_audio_active=true
-                        break
-                    fi
-                done
-            fi
-        fi
-
-        if [[ "$bt_audio_active" == "true" ]]; then
-            if [[ "$spinner_started" == "true" ]]; then
-                stop_inline_spinner
-            fi
-            opt_msg "Bluetooth already optimal"
-            return 0
-        fi
-
-        if sudo pkill -TERM bluetoothd > /dev/null 2>&1; then
-            sleep 1
-            if pgrep -x bluetoothd > /dev/null 2>&1; then
-                sudo pkill -KILL bluetoothd > /dev/null 2>&1 || true
-            fi
-            if [[ "$spinner_started" == "true" ]]; then
-                stop_inline_spinner
-            fi
-            opt_msg "Bluetooth module restarted"
-            opt_msg "Connectivity issues resolved"
-        else
-            if [[ "$spinner_started" == "true" ]]; then
-                stop_inline_spinner
-            fi
-            opt_msg "Bluetooth already optimal"
-        fi
-    else
-        if [[ "$spinner_started" == "true" ]]; then
-            stop_inline_spinner
-        fi
-        opt_msg "Bluetooth module restarted"
-        opt_msg "Connectivity issues resolved"
-    fi
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
 # Spotlight index check/rebuild (only if slow).

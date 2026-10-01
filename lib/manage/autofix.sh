@@ -146,20 +146,9 @@ perform_auto_fix() {
         echo ""
     fi
 
-    # Fix Touch ID
-    if [[ -n "${TOUCHID_NOT_CONFIGURED:-}" && "${TOUCHID_NOT_CONFIGURED}" == "true" ]]; then
-        echo -e "${BLUE}${ICON_ARROW}${NC} Configuring Touch ID for sudo..."
-        local pam_file="/etc/pam.d/sudo"
-        if sudo bash -c "grep -q 'pam_tid.so' '$pam_file' 2>/dev/null || sed -i '' '2i\\
-auth       sufficient     pam_tid.so
-' '$pam_file'" 2> /dev/null; then
-            echo -e "${GREEN}✓${NC} Touch ID configured"
-            fixed_count=$((fixed_count + 1))
-            fixed_items+=("Touch ID configured for sudo")
-        else
-            echo -e "${RED}✗${NC} Failed to configure Touch ID"
-        fi
-        echo ""
+    # PAM changes are not part of automatic fixes.
+    if [[ "${TOUCHID_NOT_CONFIGURED:-false}" == "true" ]]; then
+        printf '%s\n' "Skipped: Touch ID configuration requires a verified PAM transaction."
     fi
 
     # Install Rosetta 2

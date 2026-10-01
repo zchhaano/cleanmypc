@@ -26,3 +26,7 @@ Recommended acknowledgement copy:
 ## Maintenance Rule
 
 If upstream-derived code is shipped, keep the copyright notice and MIT license text available in distributed materials.
+
+## Atlas safety changes (2026-10-01)
+
+Mole-derived Shell components are modified to disable automatic PAM changes, privileged deletion, system update/service removal, network/Bluetooth resets and Trash emptying. Ordinary cache deletion requires Atlas's confined backend. Original MIT attribution remains applicable.

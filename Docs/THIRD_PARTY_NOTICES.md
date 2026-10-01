@@ -27,3 +27,7 @@ Atlas for Mac is released under the MIT License. This product also includes soft
 ## Future Additions
 
 Add all additional third-party libraries, bundled binaries, or copied source components here before release.
+
+## Atlas safety changes (2026-10-01)
+
+Mole-derived Shell components are modified to disable automatic PAM changes, privileged deletion, system update/service removal, network/Bluetooth resets and Trash emptying. Ordinary cache deletion requires Atlas's confined backend. Original MIT attribution remains applicable.

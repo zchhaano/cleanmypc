@@ -26,7 +26,7 @@ EOF
     [[ "$output" == *"Enable Firewall for better security"* ]]
     [[ "$output" == *"Enable FileVault"* ]]
     [[ "$output" == *"Enable Touch ID for sudo"* ]]
-    [[ "$output" == *"Low disk space (25GB free)"* ]]
+    [[ "$output" == *"Free up 9GB by cleaning caches"* ]]
     [[ "$output" == *"AUTO_FLAG=true"* ]]
 }
 
@@ -85,7 +85,7 @@ EOF
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"Firewall enabled"* ]]
-    [[ "$output" == *"Touch ID configured"* ]]
-    [[ "$output" == *"SUMMARY=Auto fixes applied: 2 issues"* ]]
+    [[ "$output" == *"Skipped: Touch ID configuration"* ]]
+    [[ "$output" == *"SUMMARY=Auto fixes applied: 1 issues"* ]]
     [[ "$output" == *"DETAILS"* ]]
 }

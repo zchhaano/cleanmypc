@@ -551,71 +551,78 @@ bytes_to_human_kb() {
 # Temporary File Management
 # ============================================================================
 
-# Tracked temporary files and directories
-declare -a MOLE_TEMP_FILES=()
-declare -a MOLE_TEMP_DIRS=()
+# Process-owned temporary workspace; never register arbitrary user paths.
+MOLE_OWNED_TEMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/mole-owned.XXXXXX") || return 1
+MOLE_OWNED_TEMP_ROOT_ID=$(stat -f '%d:%i:%u' "$MOLE_OWNED_TEMP_ROOT") || return 1
+readonly MOLE_OWNED_TEMP_ROOT MOLE_OWNED_TEMP_ROOT_ID
+declare -a MOLE_TEMP_FILES=() MOLE_TEMP_DIRS=()
+declare -a MOLE_TEMP_FILE_IDENTITIES=() MOLE_TEMP_DIR_IDENTITIES=()
 
-# Create tracked temporary file
-create_temp_file() {
-    local temp
-    temp=$(mktemp) || return 1
-    register_temp_file "$temp"
-    echo "$temp"
-}
-
-# Create tracked temporary directory
-create_temp_dir() {
-    local temp
-    temp=$(mktemp -d) || return 1
-    register_temp_dir "$temp"
-    echo "$temp"
-}
-
-# Register existing file for cleanup
-register_temp_file() {
-    MOLE_TEMP_FILES+=("$1")
-}
-
-# Register existing directory for cleanup
-register_temp_dir() {
-    MOLE_TEMP_DIRS+=("$1")
-}
-
-# Create temp file with prefix (for analyze.sh compatibility)
-# Compatible with both BSD mktemp (macOS default) and GNU mktemp (coreutils)
-mktemp_file() {
-    local prefix="${1:-mole}"
-    local temp
-    local error_msg
-    # Use TMPDIR if set, otherwise /tmp
-    # Add .XXXXXX suffix to work with both BSD and GNU mktemp
-    if ! error_msg=$(mktemp "${TMPDIR:-/tmp}/${prefix}.XXXXXX" 2>&1); then
-        echo "Error: Failed to create temporary file: $error_msg" >&2
+register_owned_temp() {
+    local path="${1:-}"
+    [[ -n "$path" && ! -L "$path" && "$(dirname "$path")" == "$MOLE_OWNED_TEMP_ROOT" ]] || return 1
+    [[ "$(stat -f '%u' "$path" 2>/dev/null)" == "$(id -u)" ]] || return 1
+    if [[ -d "$path" ]]; then
+        MOLE_TEMP_DIRS+=("$path")
+        MOLE_TEMP_DIR_IDENTITIES+=("$(stat -f '%d:%i:%u' "$path")")
+    elif [[ -f "$path" ]]; then
+        MOLE_TEMP_FILES+=("$path")
+        MOLE_TEMP_FILE_IDENTITIES+=("$(stat -f '%d:%i:%u' "$path")")
+    else
         return 1
     fi
-    temp="$error_msg"
-    register_temp_file "$temp"
-    echo "$temp"
 }
-
-# Cleanup all tracked temp files and directories
+register_temp_file() { register_owned_temp "$1"; }
+register_temp_dir() { register_owned_temp "$1"; }
+create_temp_file() {
+    local temp
+    temp=$(mktemp "$MOLE_OWNED_TEMP_ROOT/file.XXXXXX") || return 1
+    stat -f '%d:%i:%u' "$temp" > "$temp.atlas-identity" || return 1
+    printf '%s\n' "$temp"
+}
+create_temp_dir() {
+    local temp
+    temp=$(mktemp -d "$MOLE_OWNED_TEMP_ROOT/dir.XXXXXX") || return 1
+    stat -f '%d:%i:%u' "$temp" > "$temp.atlas-identity" || return 1
+    printf '%s\n' "$temp"
+}
+mktemp_file() {
+    local prefix="${1:-mole}"
+    [[ "$prefix" =~ ^[a-zA-Z0-9_-]+$ ]] || return 1
+    local temp
+    temp=$(mktemp "$MOLE_OWNED_TEMP_ROOT/$prefix.XXXXXX") || return 1
+    stat -f '%d:%i:%u' "$temp" > "$temp.atlas-identity" || return 1
+    printf '%s\n' "$temp"
+}
+cleanup_owned_temp() {
+    local path="$1" expected="$2"
+    [[ ! -L "$MOLE_OWNED_TEMP_ROOT" && "$(stat -f '%d:%i:%u' "$MOLE_OWNED_TEMP_ROOT" 2>/dev/null)" == "$MOLE_OWNED_TEMP_ROOT_ID" ]] || return 1
+    [[ ! -L "$path" && "$(dirname "$path")" == "$MOLE_OWNED_TEMP_ROOT" ]] || return 1
+    [[ "$(stat -f '%d:%i:%u' "$path" 2>/dev/null)" == "$expected" ]] || return 1
+    rm -rf -- "$path"
+}
 cleanup_temp_files() {
     stop_inline_spinner || true
-    local file
-    if [[ ${#MOLE_TEMP_FILES[@]} -gt 0 ]]; then
-        for file in "${MOLE_TEMP_FILES[@]}"; do
-            [[ -f "$file" ]] && rm -f "$file" 2> /dev/null || true
-        done
-    fi
-
-    if [[ ${#MOLE_TEMP_DIRS[@]} -gt 0 ]]; then
-        for file in "${MOLE_TEMP_DIRS[@]}"; do
-            [[ -d "$file" ]] && rm -rf "$file" 2> /dev/null || true # SAFE: cleanup_temp_files
-        done
-    fi
-
-    MOLE_TEMP_FILES=()
-    MOLE_TEMP_DIRS=()
+    local i
+    for ((i=0; i<${#MOLE_TEMP_FILES[@]}; i++)); do
+        cleanup_owned_temp "${MOLE_TEMP_FILES[$i]}" "${MOLE_TEMP_FILE_IDENTITIES[$i]}" || true
+    done
+    for ((i=0; i<${#MOLE_TEMP_DIRS[@]}; i++)); do
+        cleanup_owned_temp "${MOLE_TEMP_DIRS[$i]}" "${MOLE_TEMP_DIR_IDENTITIES[$i]}" || true
+    done
+    MOLE_TEMP_FILES=() MOLE_TEMP_DIRS=()
+    MOLE_TEMP_FILE_IDENTITIES=() MOLE_TEMP_DIR_IDENTITIES=()
+    local identity_path expected
+    for identity_path in "$MOLE_OWNED_TEMP_ROOT"/*.atlas-identity; do
+        [[ -f "$identity_path" && ! -L "$identity_path" ]] || continue
+        expected=$(cat "$identity_path")
+        [[ "$expected" =~ ^[0-9]+:[0-9]+:[0-9]+$ ]] || continue
+        if cleanup_owned_temp "${identity_path%.atlas-identity}" "$expected"; then
+            rm -f -- "$identity_path"
+        fi
+    done
+    # Unregistered/replaced entries are intentionally preserved for inspection.
+    rmdir "$MOLE_OWNED_TEMP_ROOT" 2>/dev/null || true
 }
 
 # ============================================================================

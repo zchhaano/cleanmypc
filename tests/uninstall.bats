@@ -114,108 +114,7 @@ EOF
 	[ "$result" -ge 3 ]
 }
 
-@test "batch_uninstall_applications removes selected app data" {
-	create_app_artifacts
-
-	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/uninstall/batch.sh"
-
-request_sudo_access() { return 0; }
-start_inline_spinner() { :; }
-stop_inline_spinner() { :; }
-enter_alt_screen() { :; }
-leave_alt_screen() { :; }
-hide_cursor() { :; }
-show_cursor() { :; }
-remove_apps_from_dock() { :; }
-pgrep() { return 1; }
-pkill() { return 0; }
-sudo() { return 0; } # Mock sudo command
-
-app_bundle="$HOME/Applications/TestApp.app"
-mkdir -p "$app_bundle" # Ensure this is created in the temp HOME
-
-related="$(find_app_files "com.example.TestApp" "TestApp")"
-encoded_related=$(printf '%s' "$related" | base64 | tr -d '\n')
-
-selected_apps=()
-selected_apps+=("0|$app_bundle|TestApp|com.example.TestApp|0|Never")
-files_cleaned=0
-total_items=0
-total_size_cleaned=0
-
-batch_uninstall_applications
-
-[[ ! -d "$app_bundle" ]] || exit 1
-[[ ! -d "$HOME/Library/Application Support/TestApp" ]] || exit 1
-[[ ! -d "$HOME/Library/Caches/TestApp" ]] || exit 1
-[[ ! -f "$HOME/Library/Preferences/com.example.TestApp.plist" ]] || exit 1
-[[ ! -f "$HOME/Library/LaunchAgents/com.example.TestApp.plist" ]] || exit 1
-EOF
-
-	[ "$status" -eq 0 ]
-}
-
-@test "batch_uninstall_applications preview shows full related file list" {
-	mkdir -p "$HOME/Applications/TestApp.app"
-	mkdir -p "$HOME/Library/Application Support/TestApp"
-	mkdir -p "$HOME/Library/Caches/TestApp"
-	mkdir -p "$HOME/Library/Logs/TestApp"
-	touch "$HOME/Library/Logs/TestApp/log1.log"
-	touch "$HOME/Library/Logs/TestApp/log2.log"
-	touch "$HOME/Library/Logs/TestApp/log3.log"
-	touch "$HOME/Library/Logs/TestApp/log4.log"
-	touch "$HOME/Library/Logs/TestApp/log5.log"
-	touch "$HOME/Library/Logs/TestApp/log6.log"
-
-	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/uninstall/batch.sh"
-
-request_sudo_access() { return 0; }
-start_inline_spinner() { :; }
-stop_inline_spinner() { :; }
-enter_alt_screen() { :; }
-leave_alt_screen() { :; }
-hide_cursor() { :; }
-show_cursor() { :; }
-remove_apps_from_dock() { :; }
-pgrep() { return 1; }
-pkill() { return 0; }
-sudo() { return 0; }
-has_sensitive_data() { return 1; }
-find_app_system_files() { return 0; }
-find_app_files() {
-    cat << LIST
-$HOME/Library/Application Support/TestApp
-$HOME/Library/Caches/TestApp
-$HOME/Library/Logs/TestApp/log1.log
-$HOME/Library/Logs/TestApp/log2.log
-$HOME/Library/Logs/TestApp/log3.log
-$HOME/Library/Logs/TestApp/log4.log
-$HOME/Library/Logs/TestApp/log5.log
-$HOME/Library/Logs/TestApp/log6.log
-LIST
-}
-
-selected_apps=()
-selected_apps+=("0|$HOME/Applications/TestApp.app|TestApp|com.example.TestApp|0|Never")
-files_cleaned=0
-total_items=0
-total_size_cleaned=0
-
-printf 'q' | batch_uninstall_applications
-EOF
-
-	[ "$status" -eq 0 ]
-	[[ "$output" == *"~/Library/Logs/TestApp/log6.log"* ]]
-	[[ "$output" != *"more files"* ]]
-}
-
-@test "safe_remove can remove a simple directory" {
+@test "safe_remove preserves non-cache directory" {
 	mkdir -p "$HOME/test_dir"
 	touch "$HOME/test_dir/file.txt"
 
@@ -223,8 +122,8 @@ EOF
 set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 
-safe_remove "$HOME/test_dir"
-[[ ! -d "$HOME/test_dir" ]] || exit 1
+if safe_remove "$HOME/test_dir"; then exit 1; fi
+[[ -d "$HOME/test_dir" ]] || exit 1
 EOF
 	[ "$status" -eq 0 ]
 }
@@ -311,49 +210,6 @@ result=$(decode_file_list "$encoded_data" "TestApp")
 EOF
 
 	[ "$status" -eq 0 ]
-}
-
-@test "refresh_launch_services_after_uninstall falls back after timeout" {
-	run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/uninstall/batch.sh"
-
-log_file="$HOME/lsregister-timeout.log"
-: > "$log_file"
-call_index=0
-
-get_lsregister_path() { echo "/bin/echo"; }
-debug_log() { echo "DEBUG:$*" >> "$log_file"; }
-run_with_timeout() {
-    local duration="$1"
-    shift
-    call_index=$((call_index + 1))
-    echo "CALL${call_index}:$duration:$*" >> "$log_file"
-
-    if [[ "$call_index" -eq 2 ]]; then
-        return 124
-    fi
-    if [[ "$call_index" -eq 3 ]]; then
-        return 124
-    fi
-    return 0
-}
-
-if refresh_launch_services_after_uninstall; then
-    echo "RESULT:ok"
-else
-    echo "RESULT:fail"
-fi
-
-cat "$log_file"
-EOF
-
-	[ "$status" -eq 0 ]
-	[[ "$output" == *"RESULT:ok"* ]]
-	[[ "$output" == *"CALL2:15:/bin/echo -r -f -domain local -domain user -domain system"* ]]
-	[[ "$output" == *"CALL3:10:/bin/echo -r -f -domain local -domain user"* ]]
-	[[ "$output" == *"DEBUG:LaunchServices rebuild timed out, trying lighter version"* ]]
 }
 
 @test "remove_mole deletes manual binaries and caches" {

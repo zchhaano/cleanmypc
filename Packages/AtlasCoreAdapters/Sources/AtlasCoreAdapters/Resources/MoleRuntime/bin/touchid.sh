@@ -75,209 +75,21 @@ show_status() {
 
 # Enable Touch ID for sudo
 enable_touchid() {
-    # Cleanup trap handled by global EXIT trap
-    local temp_file=""
-
     if touchid_dry_run_enabled; then
-        if is_touchid_configured; then
-            echo -e "${GREEN}${ICON_SUCCESS} Touch ID is already enabled, no changes needed${NC}"
-        else
-            echo -e "${GREEN}${ICON_SUCCESS} [DRY RUN] Would enable Touch ID for sudo${NC}"
-            echo -e "${GRAY}${ICON_REVIEW} Target files: ${PAM_SUDO_FILE} and/or ${PAM_SUDO_LOCAL_FILE}${NC}"
-        fi
+        printf '%s\n' "[DRY RUN] Touch ID configuration is read-only; no PAM file will be modified."
         return 0
     fi
-
-    # First check if system supports Touch ID
-    if ! supports_touchid; then
-        log_warning "This Mac may not support Touch ID"
-        read -rp "Continue anyway? [y/N] " confirm
-        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-            echo -e "${YELLOW}Cancelled${NC}"
-            return 1
-        fi
-        echo ""
-    fi
-
-    # Check if we should use sudo_local (Sonoma+)
-    if grep -q "sudo_local" "$PAM_SUDO_FILE"; then
-        # Check if already correctly configured in sudo_local
-        if [[ -f "$PAM_SUDO_LOCAL_FILE" ]] && grep -q "pam_tid.so" "$PAM_SUDO_LOCAL_FILE"; then
-            # It is in sudo_local, but let's check if it's ALSO in sudo (incomplete migration)
-            if grep -q "pam_tid.so" "$PAM_SUDO_FILE"; then
-                # Clean up legacy config
-                temp_file=$(create_temp_file)
-                grep -v "pam_tid.so" "$PAM_SUDO_FILE" > "$temp_file"
-                if sudo mv "$temp_file" "$PAM_SUDO_FILE" 2> /dev/null; then
-                    echo -e "${GREEN}${ICON_SUCCESS} Cleanup legacy configuration${NC}"
-                fi
-            fi
-            echo -e "${GREEN}${ICON_SUCCESS} Touch ID is already enabled${NC}"
-            return 0
-        fi
-
-        # Not configured in sudo_local yet.
-        # Check if configured in sudo (Legacy)
-        local is_legacy_configured=false
-        if grep -q "pam_tid.so" "$PAM_SUDO_FILE"; then
-            is_legacy_configured=true
-        fi
-
-        # Function to write to sudo_local
-        local write_success=false
-        if [[ ! -f "$PAM_SUDO_LOCAL_FILE" ]]; then
-            # Create the file
-            echo "# sudo_local: local customizations for sudo" | sudo tee "$PAM_SUDO_LOCAL_FILE" > /dev/null
-            echo "$PAM_TID_LINE" | sudo tee -a "$PAM_SUDO_LOCAL_FILE" > /dev/null
-            sudo chmod 444 "$PAM_SUDO_LOCAL_FILE"
-            sudo chown root:wheel "$PAM_SUDO_LOCAL_FILE"
-            write_success=true
-        else
-            # Append if not present
-            if ! grep -q "pam_tid.so" "$PAM_SUDO_LOCAL_FILE"; then
-                temp_file=$(create_temp_file)
-                cp "$PAM_SUDO_LOCAL_FILE" "$temp_file"
-                echo "$PAM_TID_LINE" >> "$temp_file"
-                sudo mv "$temp_file" "$PAM_SUDO_LOCAL_FILE"
-                sudo chmod 444 "$PAM_SUDO_LOCAL_FILE"
-                sudo chown root:wheel "$PAM_SUDO_LOCAL_FILE"
-                write_success=true
-            else
-                write_success=true # Already there (should be caught by first check, but safe fallback)
-            fi
-        fi
-
-        if $write_success; then
-            # If we migrated from legacy, clean it up now
-            if $is_legacy_configured; then
-                temp_file=$(create_temp_file)
-                grep -v "pam_tid.so" "$PAM_SUDO_FILE" > "$temp_file"
-                sudo mv "$temp_file" "$PAM_SUDO_FILE"
-                log_success "Touch ID migrated to sudo_local"
-            else
-                log_success "Touch ID enabled, via sudo_local, try: sudo ls"
-            fi
-            return 0
-        else
-            log_error "Failed to write to sudo_local"
-            return 1
-        fi
-    fi
-
-    # Legacy method: Modify sudo file directly
-
-    # Check if already configured (Legacy)
-    if is_touchid_configured; then
-        echo -e "${GREEN}${ICON_SUCCESS} Touch ID is already enabled${NC}"
-        return 0
-    fi
-
-    # Create backup only if it doesn't exist to preserve original state
-    if [[ ! -f "${PAM_SUDO_FILE}.mole-backup" ]]; then
-        if ! sudo cp "$PAM_SUDO_FILE" "${PAM_SUDO_FILE}.mole-backup" 2> /dev/null; then
-            log_error "Failed to create backup"
-            return 1
-        fi
-    fi
-
-    # Create temp file
-    temp_file=$(create_temp_file)
-
-    # Insert pam_tid.so after the first comment block
-    awk '
-        BEGIN { inserted = 0 }
-        /^#/ { print; next }
-        !inserted && /^[^#]/ {
-            print "'"$PAM_TID_LINE"'"
-            inserted = 1
-        }
-        { print }
-    ' "$PAM_SUDO_FILE" > "$temp_file"
-
-    # Verify content change
-    if cmp -s "$PAM_SUDO_FILE" "$temp_file"; then
-        log_error "Failed to modify configuration"
-        return 1
-    fi
-
-    # Apply the changes
-    if sudo mv "$temp_file" "$PAM_SUDO_FILE" 2> /dev/null; then
-        log_success "Touch ID enabled, try: sudo ls"
-        return 0
-    else
-        log_error "Failed to enable Touch ID"
-        return 1
-    fi
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
 # Disable Touch ID for sudo
 disable_touchid() {
-    # Cleanup trap handled by global EXIT trap
-    local temp_file=""
-
     if touchid_dry_run_enabled; then
-        if ! is_touchid_configured; then
-            echo -e "${YELLOW}Touch ID is not currently enabled${NC}"
-        else
-            echo -e "${GREEN}${ICON_SUCCESS} [DRY RUN] Would disable Touch ID for sudo${NC}"
-            echo -e "${GRAY}${ICON_REVIEW} Target files: ${PAM_SUDO_FILE} and/or ${PAM_SUDO_LOCAL_FILE}${NC}"
-        fi
+        printf '%s\n' "[DRY RUN] Touch ID configuration is read-only; no PAM file will be modified."
         return 0
     fi
-
-    if ! is_touchid_configured; then
-        echo -e "${YELLOW}Touch ID is not currently enabled${NC}"
-        return 0
-    fi
-
-    # Check sudo_local first
-    if [[ -f "$PAM_SUDO_LOCAL_FILE" ]] && grep -q "pam_tid.so" "$PAM_SUDO_LOCAL_FILE"; then
-        # Remove from sudo_local
-        temp_file=$(create_temp_file)
-        grep -v "pam_tid.so" "$PAM_SUDO_LOCAL_FILE" > "$temp_file"
-
-        if sudo mv "$temp_file" "$PAM_SUDO_LOCAL_FILE" 2> /dev/null; then
-            # Since we modified sudo_local, we should also check if it's in sudo file (legacy cleanup)
-            if grep -q "pam_tid.so" "$PAM_SUDO_FILE"; then
-                temp_file=$(create_temp_file)
-                grep -v "pam_tid.so" "$PAM_SUDO_FILE" > "$temp_file"
-                sudo mv "$temp_file" "$PAM_SUDO_FILE"
-            fi
-            echo -e "${GREEN}${ICON_SUCCESS} Touch ID disabled, removed from sudo_local${NC}"
-            echo ""
-            return 0
-        else
-            log_error "Failed to disable Touch ID from sudo_local"
-            return 1
-        fi
-    fi
-
-    # Fallback to sudo file (legacy)
-    if grep -q "pam_tid.so" "$PAM_SUDO_FILE"; then
-        # Create backup only if it doesn't exist
-        if [[ ! -f "${PAM_SUDO_FILE}.mole-backup" ]]; then
-            if ! sudo cp "$PAM_SUDO_FILE" "${PAM_SUDO_FILE}.mole-backup" 2> /dev/null; then
-                log_error "Failed to create backup"
-                return 1
-            fi
-        fi
-
-        # Remove pam_tid.so line
-        temp_file=$(create_temp_file)
-        grep -v "pam_tid.so" "$PAM_SUDO_FILE" > "$temp_file"
-
-        if sudo mv "$temp_file" "$PAM_SUDO_FILE" 2> /dev/null; then
-            echo -e "${GREEN}${ICON_SUCCESS} Touch ID disabled${NC}"
-            echo ""
-            return 0
-        else
-            log_error "Failed to disable Touch ID"
-            return 1
-        fi
-    fi
-
-    # Should not reach here if is_touchid_configured was true
-    log_error "Could not find Touch ID configuration to disable"
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
     return 1
 }
 

@@ -38,44 +38,6 @@ EOF
     [[ "$output" != *"Trash"* ]]
 }
 
-@test "clean_user_essentials falls back when Finder trash operations time out" {
-    mkdir -p "$HOME/.Trash"
-    touch "$HOME/.Trash/one.tmp" "$HOME/.Trash/two.tmp"
-
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/user.sh"
-DRY_RUN=false
-start_section_spinner() { :; }
-stop_section_spinner() { :; }
-safe_clean() { :; }
-note_activity() { :; }
-is_path_whitelisted() { return 1; }
-debug_log() { :; }
-run_with_timeout() {
-    local _duration="$1"
-    shift
-    if [[ "$1" == "osascript" ]]; then
-        return 124
-    fi
-    "$@"
-}
-safe_remove() {
-    local target="$1"
-    /bin/rm -rf "$target"
-    return 0
-}
-
-clean_user_essentials
-[[ ! -e "$HOME/.Trash/one.tmp" ]] || exit 1
-[[ ! -e "$HOME/.Trash/two.tmp" ]] || exit 1
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Trash · emptied, 2 items"* ]]
-}
-
 @test "clean_app_caches includes macOS system caches" {
     run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
 set -euo pipefail
@@ -299,9 +261,9 @@ echo "cache" > "$HOME/Library/Group Containers/group.com.example.tool/Library/Ca
 
 clean_group_container_caches
 
-if [[ ! -e "$HOME/Library/Group Containers/group.com.microsoft.teams/Library/Logs/log.txt" ]] \
+if [[ -e "$HOME/Library/Group Containers/group.com.microsoft.teams/Library/Logs/log.txt" ]] \
     && [[ -e "$HOME/Library/Group Containers/group.com.microsoft.teams/Library/Caches/cache.db" ]] \
-    && [[ ! -e "$HOME/Library/Group Containers/group.com.example.tool/Library/Caches/cache.db" ]]; then
+    && [[ -e "$HOME/Library/Group Containers/group.com.example.tool/Library/Caches/cache.db" ]]; then
     echo "PASS"
 else
     echo "FAIL"
@@ -310,7 +272,7 @@ fi
 EOF
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Group Containers logs/caches"* ]]
+    [[ "$output" != *"Group Containers logs/caches"* ]]
     [[ "$output" == *"PASS"* ]]
 }
 
@@ -338,7 +300,7 @@ is_path_whitelisted() {
 clean_group_container_caches
 
 if [[ -e "$HOME/Library/Group Containers/group.com.example.tool/Library/Caches/keep.db" ]] \
-    && [[ ! -e "$HOME/Library/Group Containers/group.com.example.tool/Library/Caches/drop.db" ]]; then
+    && [[ -e "$HOME/Library/Group Containers/group.com.example.tool/Library/Caches/drop.db" ]]; then
     echo "PASS"
 else
     echo "FAIL"
@@ -484,30 +446,4 @@ EOF
 
     [ "$status" -eq 0 ]
     [[ -z "$output" ]]
-}
-
-@test "clean_user_essentials includes dotfiles in Trash cleanup" {
-    mkdir -p "$HOME/.Trash"
-    touch "$HOME/.Trash/.hidden_file"
-    touch "$HOME/.Trash/.DS_Store"
-    touch "$HOME/.Trash/regular_file.txt"
-    mkdir -p "$HOME/.Trash/.hidden_dir"
-    mkdir -p "$HOME/.Trash/regular_dir"
-
-    run bash <<'EOF'
-set -euo pipefail
-count=0
-while IFS= read -r -d '' item; do
-    ((count++)) || true
-    echo "FOUND: $(basename "$item")"
-done < <(command find "$HOME/.Trash" -mindepth 1 -maxdepth 1 -print0 2> /dev/null || true)
-echo "COUNT: $count"
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"COUNT: 5"* ]]
-    [[ "$output" == *"FOUND: .hidden_file"* ]]
-    [[ "$output" == *"FOUND: .DS_Store"* ]]
-    [[ "$output" == *"FOUND: .hidden_dir"* ]]
-    [[ "$output" == *"FOUND: regular_file.txt"* ]]
 }

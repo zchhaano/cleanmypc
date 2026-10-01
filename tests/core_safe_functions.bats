@@ -98,31 +98,31 @@ teardown() {
     [[ "$output" == *"protected system path"* ]]
 }
 
-@test "safe_remove successfully removes file" {
+@test "safe_remove refuses non-cache file" {
     local test_file="$TEST_DIR/test_file.txt"
     echo "test" > "$test_file"
 
     run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; safe_remove '$test_file' true"
-    [ "$status" -eq 0 ]
-    [ ! -f "$test_file" ]
+    [ "$status" -ne 0 ]
+    [ -f "$test_file" ]
 }
 
-@test "safe_remove successfully removes directory" {
+@test "safe_remove refuses non-cache directory" {
     local test_subdir="$TEST_DIR/test_subdir"
     mkdir -p "$test_subdir"
     touch "$test_subdir/file.txt"
 
     run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; safe_remove '$test_subdir' true"
-    [ "$status" -eq 0 ]
-    [ ! -d "$test_subdir" ]
+    [ "$status" -ne 0 ]
+    [ -d "$test_subdir" ]
 }
 
-@test "safe_remove handles non-existent path gracefully" {
+@test "safe_remove refuses unregistered missing path" {
     run bash -c "source '$PROJECT_ROOT/lib/core/common.sh'; safe_remove '$TEST_DIR/nonexistent' true"
-    [ "$status" -eq 0 ]
+    [ "$status" -ne 0 ]
 }
 
-@test "safe_remove preserves interrupt exit codes" {
+@test "safe_remove does not run rm for unauthorized path" {
     local test_file="$TEST_DIR/interrupt_file"
     echo "test" > "$test_file"
 
@@ -131,7 +131,7 @@ teardown() {
         rm() { return 130; }
         safe_remove '$test_file' true
     "
-    [ "$status" -eq 130 ]
+    [ "$status" -eq 1 ]
     [ -f "$test_file" ]
 }
 
@@ -159,7 +159,7 @@ teardown() {
         safe_sudo_remove '$link_dir' 2>&1
     "
     [ "$status" -eq 1 ]
-    [[ "$output" == *"Refusing to sudo remove symlink"* ]]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
 @test "safe_find_delete rejects symlinked directory" {

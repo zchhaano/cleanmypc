@@ -82,168 +82,42 @@ decode_file_list() {
 # Stop Launch Agents/Daemons for an app.
 # Security: bundle_id is validated to be reverse-DNS format before use in find patterns
 stop_launch_services() {
-    local bundle_id="$1"
-    local has_system_files="${2:-false}"
-
-    if is_uninstall_dry_run; then
-        debug_log "[DRY RUN] Would unload launch services for bundle: $bundle_id"
-        return 0
-    fi
-
-    [[ -z "$bundle_id" || "$bundle_id" == "unknown" ]] && return 0
-
-    # Validate bundle_id format: must be reverse-DNS style (e.g., com.example.app)
-    # This prevents glob injection attacks if bundle_id contains special characters
-    if [[ ! "$bundle_id" =~ ^[a-zA-Z0-9][-a-zA-Z0-9]*(\.[a-zA-Z0-9][-a-zA-Z0-9]*)+$ ]]; then
-        debug_log "Invalid bundle_id format for LaunchAgent search: $bundle_id"
-        return 0
-    fi
-
-    if [[ -d ~/Library/LaunchAgents ]]; then
-        while IFS= read -r -d '' plist; do
-            launchctl unload "$plist" 2> /dev/null || true
-        done < <(find ~/Library/LaunchAgents -maxdepth 1 -name "${bundle_id}*.plist" -print0 2> /dev/null)
-    fi
-
-    if [[ "$has_system_files" == "true" ]]; then
-        if [[ -d /Library/LaunchAgents ]]; then
-            while IFS= read -r -d '' plist; do
-                sudo launchctl unload "$plist" 2> /dev/null || true
-            done < <(find /Library/LaunchAgents -maxdepth 1 -name "${bundle_id}*.plist" -print0 2> /dev/null)
-        fi
-        if [[ -d /Library/LaunchDaemons ]]; then
-            while IFS= read -r -d '' plist; do
-                sudo launchctl unload "$plist" 2> /dev/null || true
-            done < <(find /Library/LaunchDaemons -maxdepth 1 -name "${bundle_id}*.plist" -print0 2> /dev/null)
-        fi
-    fi
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
 # Unregister app bundle from LaunchServices before deleting files.
 # This helps remove stale app entries from Spotlight's app results list.
 unregister_app_bundle() {
-    local app_path="$1"
-
-    [[ -n "$app_path" && -e "$app_path" ]] || return 0
-    [[ "$app_path" == *.app ]] || return 0
-
-    local lsregister
-    lsregister=$(get_lsregister_path)
-    [[ -x "$lsregister" ]] || return 0
-
-    [[ "${MOLE_DRY_RUN:-0}" == "1" ]] && return 0
-
-    set +e
-    "$lsregister" -u "$app_path" > /dev/null 2>&1
-    set -e
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
 # Compact and rebuild LaunchServices after uninstall batch to clear stale app metadata.
 refresh_launch_services_after_uninstall() {
-    local lsregister
-    lsregister=$(get_lsregister_path)
-    [[ -x "$lsregister" ]] || return 0
-
-    [[ "${MOLE_DRY_RUN:-0}" == "1" ]] && return 0
-
-    local success=0
-    set +e
-    # Add 10s timeout to prevent hanging (gc is usually fast)
-    # run_with_timeout falls back to shell implementation if timeout command unavailable
-    run_with_timeout 10 "$lsregister" -gc > /dev/null 2>&1 || true
-    # Add 15s timeout for rebuild (can be slow on some systems)
-    run_with_timeout 15 "$lsregister" -r -f -domain local -domain user -domain system > /dev/null 2>&1
-    success=$?
-    # 124 = timeout exit code (from run_with_timeout or timeout command)
-    if [[ $success -eq 124 ]]; then
-        debug_log "LaunchServices rebuild timed out, trying lighter version"
-        run_with_timeout 10 "$lsregister" -r -f -domain local -domain user > /dev/null 2>&1
-        success=$?
-    elif [[ $success -ne 0 ]]; then
-        run_with_timeout 10 "$lsregister" -r -f -domain local -domain user > /dev/null 2>&1
-        success=$?
-    fi
-    set -e
-
-    [[ $success -eq 0 || $success -eq 124 ]]
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
 # Remove macOS Login Items for an app
 remove_login_item() {
-    local app_name="$1"
-    local bundle_id="$2"
-
-    if is_uninstall_dry_run; then
-        debug_log "[DRY RUN] Would remove login item: ${app_name:-$bundle_id}"
-        return 0
-    fi
-
-    # Skip if no identifiers provided
-    [[ -z "$app_name" && -z "$bundle_id" ]] && return 0
-
-    # Strip .app suffix if present (login items don't include it)
-    local clean_name="${app_name%.app}"
-
-    # Remove from Login Items using index-based deletion (handles broken items)
-    if [[ -n "$clean_name" ]]; then
-        # Escape double quotes and backslashes for AppleScript
-        local escaped_name="${clean_name//\\/\\\\}"
-        escaped_name="${escaped_name//\"/\\\"}"
-
-        osascript <<- EOF > /dev/null 2>&1 || true
-			tell application "System Events"
-			    try
-			        set itemCount to count of login items
-			        -- Delete in reverse order to avoid index shifting
-			        repeat with i from itemCount to 1 by -1
-			            try
-			                set itemName to name of login item i
-			                if itemName is "$escaped_name" then
-			                    delete login item i
-			                end if
-			            end try
-			        end repeat
-			    end try
-			end tell
-		EOF
-    fi
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
 # Remove files (handles symlinks, optional sudo).
 # Security: All paths pass validate_path_for_deletion() before any deletion.
 remove_file_list() {
-    local file_list="$1"
-    local use_sudo="${2:-false}"
-    local count=0
-
-    while IFS= read -r file; do
-        [[ -n "$file" && -e "$file" ]] || continue
-
-        if ! validate_path_for_deletion "$file"; then
-            continue
-        fi
-
-        if [[ -L "$file" ]]; then
-            safe_remove_symlink "$file" "$use_sudo" && ((++count)) || true
-        else
-            if [[ "$use_sudo" == "true" ]]; then
-                if is_uninstall_dry_run; then
-                    debug_log "[DRY RUN] Would sudo remove: $file"
-                    ((++count))
-                else
-                    safe_sudo_remove "$file" && ((++count)) || true
-                fi
-            else
-                safe_remove "$file" true && ((++count)) || true
-            fi
-        fi
-    done <<< "$file_list"
-
-    echo "$count"
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
 # Batch uninstall with single confirmation.
 batch_uninstall_applications() {
+    if ! is_uninstall_dry_run; then
+        printf '%s\n' "Not executed: CLI uninstall is read-only under the safety policy." >&2
+        return 1
+    fi
     local total_size_freed=0
 
     # shellcheck disable=SC2154

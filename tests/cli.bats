@@ -234,7 +234,7 @@ EOF
 	[[ "$output" == *"enabled"* ]]
 }
 
-@test "enable_touchid inserts pam_tid line in pam file" {
+@test "enable_touchid refuses PAM mutation" {
 	pam_file="$HOME/pam_enable"
 	cat >"$pam_file" <<'EOF'
 auth       sufficient     pam_opendirectory.so
@@ -244,12 +244,12 @@ EOF
 	create_fake_utils "$fake_bin"
 
 	run env PATH="$fake_bin:$PATH" MOLE_PAM_SUDO_FILE="$pam_file" "$PROJECT_ROOT/bin/touchid.sh" enable
-	[ "$status" -eq 0 ]
-	grep -q "pam_tid.so" "$pam_file"
-	[[ -f "${pam_file}.mole-backup" ]]
+	[ "$status" -ne 0 ]
+	! grep -q "pam_tid.so" "$pam_file"
+	[[ ! -f "${pam_file}.mole-backup" ]]
 }
 
-@test "disable_touchid removes pam_tid line" {
+@test "disable_touchid refuses PAM mutation" {
 	pam_file="$HOME/pam_disable"
 	cat >"$pam_file" <<'EOF'
 auth       sufficient     pam_tid.so
@@ -260,9 +260,9 @@ EOF
 	create_fake_utils "$fake_bin"
 
 	run env PATH="$fake_bin:$PATH" MOLE_PAM_SUDO_FILE="$pam_file" "$PROJECT_ROOT/bin/touchid.sh" disable
-	[ "$status" -eq 0 ]
-	run grep "pam_tid.so" "$pam_file"
 	[ "$status" -ne 0 ]
+	run grep "pam_tid.so" "$pam_file"
+	[ "$status" -eq 0 ]
 }
 
 @test "touchid enable --dry-run does not modify pam file" {

@@ -138,9 +138,6 @@ EOF
 
     # System performance optimizations (new)
     items+=('memory_pressure_relief|Memory Optimization|Release inactive memory to improve system responsiveness|true')
-    items+=('network_stack_optimize|Network Stack Refresh|Flush routing table and ARP cache to resolve network issues|true')
-    items+=('disk_permissions_repair|Permission Repair|Fix user directory permission issues|true')
-    items+=('bluetooth_reset|Bluetooth Refresh|Restart Bluetooth module to fix connectivity (skips if in use)|true')
     items+=('spotlight_index_optimize|Spotlight Optimization|Rebuild index if search is slow (smart detection)|true')
 
     # Removed high-risk optimizations:

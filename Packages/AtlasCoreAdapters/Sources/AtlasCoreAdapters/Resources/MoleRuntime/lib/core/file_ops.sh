@@ -184,222 +184,26 @@ validate_path_for_deletion() {
 
 # Safe wrapper around rm -rf with validation
 safe_remove() {
-    local path="$1"
-    local silent="${2:-false}"
-
-    # Validate path
-    if ! validate_path_for_deletion "$path"; then
-        return 1
-    fi
-
-    # Check if path exists
-    if [[ ! -e "$path" ]]; then
-        return 0
-    fi
-
-    # Dry-run mode: log but don't delete
+    local path="${1:-}"
+    validate_path_for_deletion "$path" || return 1
     if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
-        if [[ "${MO_DEBUG:-}" == "1" ]]; then
-            local file_type="file"
-            [[ -d "$path" ]] && file_type="directory"
-            [[ -L "$path" ]] && file_type="symlink"
-
-            local file_size=""
-            local file_age=""
-
-            if [[ -e "$path" ]]; then
-                local size_kb
-                size_kb=$(get_path_size_kb "$path" 2> /dev/null || echo "0")
-                if [[ "$size_kb" -gt 0 ]]; then
-                    file_size=$(bytes_to_human "$((size_kb * 1024))")
-                fi
-
-                if [[ -f "$path" || -d "$path" ]] && ! [[ -L "$path" ]]; then
-                    local mod_time
-                    mod_time=$(stat -f%m "$path" 2> /dev/null || echo "0")
-                    local now
-                    now=$(date +%s 2> /dev/null || echo "0")
-                    if [[ "$mod_time" -gt 0 && "$now" -gt 0 ]]; then
-                        file_age=$(((now - mod_time) / 86400))
-                    fi
-                fi
-            fi
-
-            debug_file_action "[DRY RUN] Would remove" "$path" "$file_size" "$file_age"
-        else
-            debug_log "[DRY RUN] Would remove: $path"
-        fi
+        log_info "[DRY-RUN] Review candidate: $path"
         return 0
     fi
-
-    debug_log "Removing: $path"
-
-    # Calculate size before deletion for logging
-    local size_kb=0
-    local size_human=""
-    if oplog_enabled; then
-        if [[ -e "$path" ]]; then
-            size_kb=$(get_path_size_kb "$path" 2> /dev/null || echo "0")
-            if [[ "$size_kb" =~ ^[0-9]+$ ]] && [[ "$size_kb" -gt 0 ]]; then
-                size_human=$(bytes_to_human "$((size_kb * 1024))" 2> /dev/null || echo "${size_kb}KB")
-            fi
-        fi
-    fi
-
-    # Perform the deletion
-    # Use || to capture the exit code so set -e won't abort on rm failures
-    local error_msg
-    local rm_exit=0
-    error_msg=$(rm -rf "$path" 2>&1) || rm_exit=$? # safe_remove
-
-    # Preserve interrupt semantics so callers can abort long-running deletions.
-    if [[ $rm_exit -ge 128 ]]; then
-        return "$rm_exit"
-    fi
-
-    if [[ $rm_exit -eq 0 ]]; then
-        # Log successful removal
-        log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$path" "$size_human"
-        return 0
-    else
-        # Check if it's a permission error
-        if [[ "$error_msg" == *"Permission denied"* ]] || [[ "$error_msg" == *"Operation not permitted"* ]]; then
-            MOLE_PERMISSION_DENIED_COUNT=${MOLE_PERMISSION_DENIED_COUNT:-0}
-            MOLE_PERMISSION_DENIED_COUNT=$((MOLE_PERMISSION_DENIED_COUNT + 1))
-            export MOLE_PERMISSION_DENIED_COUNT
-            debug_log "Permission denied: $path, may need Full Disk Access"
-            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "FAILED" "$path" "permission denied"
-        else
-            [[ "$silent" != "true" ]] && log_error "Failed to remove: $path"
-            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "FAILED" "$path" "error"
-        fi
-        return 1
-    fi
+    printf '%s\n' "Not executed: cache deletion requires the confined safe-remove backend." >&2
+    return 1
 }
 
 # Safe symlink removal (for pre-validated symlinks only)
 safe_remove_symlink() {
-    local path="$1"
-    local use_sudo="${2:-false}"
-
-    if [[ ! -L "$path" ]]; then
-        return 1
-    fi
-
-    if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
-        debug_log "[DRY RUN] Would remove symlink: $path"
-        return 0
-    fi
-
-    local rm_exit=0
-    if [[ "$use_sudo" == "true" ]]; then
-        sudo rm "$path" 2> /dev/null || rm_exit=$?
-    else
-        rm "$path" 2> /dev/null || rm_exit=$?
-    fi
-
-    if [[ $rm_exit -eq 0 ]]; then
-        log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$path" "symlink"
-        return 0
-    else
-        log_operation "${MOLE_CURRENT_COMMAND:-clean}" "FAILED" "$path" "symlink removal failed"
-        return 1
-    fi
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
 # Safe sudo removal with symlink protection
 safe_sudo_remove() {
-    local path="$1"
-
-    if ! validate_path_for_deletion "$path"; then
-        log_error "Path validation failed for sudo remove: $path"
-        return 1
-    fi
-
-    if [[ ! -e "$path" ]]; then
-        return 0
-    fi
-
-    if [[ -L "$path" ]]; then
-        log_error "Refusing to sudo remove symlink: $path"
-        return 1
-    fi
-
-    if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
-        if [[ "${MO_DEBUG:-}" == "1" ]]; then
-            local file_type="file"
-            [[ -d "$path" ]] && file_type="directory"
-
-            local file_size=""
-            local file_age=""
-
-            if sudo test -e "$path" 2> /dev/null; then
-                local size_kb
-                size_kb=$(sudo du -skP "$path" 2> /dev/null | awk '{print $1}' || echo "0")
-                if [[ "$size_kb" -gt 0 ]]; then
-                    file_size=$(bytes_to_human "$((size_kb * 1024))")
-                fi
-
-                if sudo test -f "$path" 2> /dev/null || sudo test -d "$path" 2> /dev/null; then
-                    local mod_time
-                    mod_time=$(sudo stat -f%m "$path" 2> /dev/null || echo "0")
-                    local now
-                    now=$(date +%s 2> /dev/null || echo "0")
-                    if [[ "$mod_time" -gt 0 && "$now" -gt 0 ]]; then
-                        local age_seconds=$((now - mod_time))
-                        file_age=$(format_duration_human "$age_seconds")
-                    fi
-                fi
-            fi
-
-            log_info "[DRY-RUN] Would sudo remove: $file_type $path"
-            [[ -n "$file_size" ]] && log_info "  Size: $file_size"
-            [[ -n "$file_age" ]] && log_info "  Age: $file_age"
-        else
-            log_info "[DRY-RUN] Would sudo remove: $path"
-        fi
-        return 0
-    fi
-
-    local size_kb=0
-    local size_human=""
-    if oplog_enabled; then
-        if sudo test -e "$path" 2> /dev/null; then
-            size_kb=$(sudo du -skP "$path" 2> /dev/null | awk '{print $1}' || echo "0")
-            if [[ "$size_kb" =~ ^[0-9]+$ ]] && [[ "$size_kb" -gt 0 ]]; then
-                size_human=$(bytes_to_human "$((size_kb * 1024))" 2> /dev/null || echo "${size_kb}KB")
-            fi
-        fi
-    fi
-
-    local output
-    local ret=0
-    output=$(sudo rm -rf "$path" 2>&1) || ret=$? # safe_remove
-
-    if [[ $ret -eq 0 ]]; then
-        log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$path" "$size_human"
-        return 0
-    fi
-
-    case "$output" in
-        *"Operation not permitted"*)
-            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "FAILED" "$path" "sip/mdm protected"
-            return "$MOLE_ERR_SIP_PROTECTED"
-            ;;
-        *"Read-only file system"*)
-            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "FAILED" "$path" "readonly filesystem"
-            return "$MOLE_ERR_READONLY_FS"
-            ;;
-        *"Sorry, try again"* | *"incorrect passphrase"* | *"incorrect credentials"*)
-            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "FAILED" "$path" "auth failed"
-            return "$MOLE_ERR_AUTH_FAILED"
-            ;;
-        *)
-            log_error "Failed to remove, sudo: $path"
-            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "FAILED" "$path" "sudo error"
-            return 1
-            ;;
-    esac
+    printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
 # ============================================================================
