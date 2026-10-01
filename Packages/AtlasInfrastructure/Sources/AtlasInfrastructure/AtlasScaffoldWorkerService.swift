@@ -1,6 +1,7 @@
 import AtlasApplication
 import AtlasDomain
 import AtlasFileSafety
+import CryptoKit
 import AtlasProtocol
 import Foundation
 
@@ -18,6 +19,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
     private let nowProvider: @Sendable () -> Date
     private let allowProviderFailureFallback: Bool
     private let allowStateOnlyCleanExecution: Bool
+    private let planRegistry = AtlasActionPlanRegistry()
     private var organizerRoots: [URL] = []
     private var state: AtlasWorkspaceState
     private var pendingAppUninstallSnapshots: [UUID: AtlasAppUninstallEvidenceSnapshot] = [:]
@@ -56,6 +58,14 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
 
     public func submit(_ request: AtlasRequestEnvelope) async throws -> AtlasWorkerCommandResult {
         AtlasL10n.setCurrentLanguage(state.settings.language)
+        // Release capability remains closed until recovery and VM acceptance are recorded.
+        // Environment variables cannot enable file mutations.
+        switch request.command {
+        case .executePlan, .fileOrganizerExecutePlan, .executeAppUninstall, .restoreItems:
+            return rejectedResult(for: request, code: .executionUnavailable,
+                reason: AtlasL10n.string("security.mutation.unavailable"))
+        default: break
+        }
         if case .restoreItems = request.command {
             // Restore needs selected-item expiry reporting before the general prune.
         } else {
@@ -192,7 +202,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
     }
 
     private func previewPlan(using request: AtlasRequestEnvelope, findingIDs: [UUID]) async -> AtlasWorkerCommandResult {
-        let plan = makePreviewPlan(findingIDs: findingIDs)
+        let plan = registeredPreview(makePreviewPlan(findingIDs: findingIDs), kind: .smartClean)
         state.currentPlan = plan
         await persistState(context: "preview plan refresh")
         let response = AtlasResponseEnvelope(requestID: request.id, response: .preview(plan))
@@ -470,7 +480,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
             )
         }
 
-        let preview = makeAppUninstallPreview(for: app)
+        let preview = registeredPreview(makeAppUninstallPreview(for: app), kind: .uninstall)
         let response = AtlasResponseEnvelope(requestID: request.id, response: .preview(preview))
         await auditStore.append("Prepared uninstall preview for \(app.name)")
         return AtlasWorkerCommandResult(
@@ -710,12 +720,12 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
     private func fileOrganizerPreviewPlan(using request: AtlasRequestEnvelope, taskID: UUID, entryIDs: [UUID]) async -> AtlasWorkerCommandResult {
         let entries: [FileOrganizerEntry]
         if entryIDs.isEmpty {
-            entries = state.snapshot.fileOrganizerEntries
+            entries = []
         } else {
             entries = state.snapshot.fileOrganizerEntries.filter { entryIDs.contains($0.id) }
         }
 
-        let plan = makeFileOrganizerPlan(from: entries)
+        let plan = registeredPreview(makeFileOrganizerPlan(from: entries), kind: .organize)
         let response = AtlasResponseEnvelope(requestID: request.id, response: .fileOrganizerPlan(plan))
         await auditStore.append("Prepared file organizer plan \(plan.id.uuidString)")
         return AtlasWorkerCommandResult(
@@ -916,6 +926,40 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         )
     }
 
+    private func boundedByteTotal(_ values: [Int64]) -> Int64 {
+        var total: Int64 = 0
+        for value in values {
+            let sum = total.addingReportingOverflow(value)
+            guard value >= 0, !sum.overflow else { return 0 }
+            total = sum.partialValue
+        }
+        return total
+    }
+
+    private func registeredPreview(_ plan: ActionPlan, kind: AtlasFileOperationKind) -> ActionPlan {
+        guard plan.items.count <= AtlasExecutionLimits.maximumScanEntries else { return plan }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let context = AtlasFilePolicyContext(homeDirectoryURL: home, organizerRoots: organizerRoots,
+            allowedApplicationPaths: Set(state.snapshot.apps.map(\.bundlePath)))
+        var operations: [AtlasFileOperationIntent] = []
+        for item in plan.items {
+            guard item.kind != .inspectPermission, item.kind != .reviewEvidence else { continue }
+            for path in item.targetPaths ?? [] {
+                do {
+                    let url = try AtlasFileSafetyPolicy.expanded(path, homeDirectoryURL: home)
+                    let identity = try AtlasFileIdentityReader.read(url)
+                    let destination = kind == .organize ? state.snapshot.fileOrganizerEntries.first { $0.id == item.id }?.proposedDestination : nil
+                    let id = UUID()
+                    let intent = AtlasFileOperationIntent(entryID: id, kind: kind, sourcePath: url.path,
+                        destinationPath: try destination.map { try AtlasFileSafetyPolicy.expanded($0, homeDirectoryURL: home).path }, expectedIdentity: identity)
+                    _ = try AtlasFileSafetyPolicy.validate(intent, context: context)
+                    operations.append(intent)
+                } catch { return plan } // Preview remains review-only when any target lacks proof.
+            }
+        }
+        return (try? planRegistry.register(plan: plan, operations: operations, policyRevision: 1).plan) ?? plan
+    }
+
     private func makeFileOrganizerPlan(from entries: [FileOrganizerEntry]) -> ActionPlan {
         let items = entries.map { entry in
             ActionItem(
@@ -927,32 +971,16 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
                 targetPaths: [entry.path]
             )
         }
-        // Deterministic plan ID: XOR-fold ALL entry IDs + entry count into a stable 16-byte UUID
-        let planID: UUID = {
-            var s = (UInt8(0), UInt8(0), UInt8(0), UInt8(0),
-                     UInt8(0), UInt8(0), UInt8(0), UInt8(0),
-                     UInt8(0), UInt8(0), UInt8(0), UInt8(0),
-                     UInt8(0), UInt8(0), UInt8(0), UInt8(0))
-            for entry in entries {
-                let u = entry.id.uuid
-                s = (s.0 ^ u.0, s.1 ^ u.1, s.2 ^ u.2, s.3 ^ u.3,
-                     s.4 ^ u.4, s.5 ^ u.5, s.6 ^ u.6, s.7 ^ u.7,
-                     s.8 ^ u.8, s.9 ^ u.9, s.10 ^ u.10, s.11 ^ u.11,
-                     s.12 ^ u.12, s.13 ^ u.13, s.14 ^ u.14, s.15 ^ u.15)
-            }
-            // Mix in entry count to distinguish different-sized sets with overlapping IDs
-            let countBytes = UInt16(entries.count)
-            s = (s.0, s.1 ^ UInt8(truncatingIfNeeded: countBytes >> 8), s.2 ^ UInt8(truncatingIfNeeded: countBytes), s.3,
-                 s.4, s.5, s.6, s.7,
-                 s.8, s.9, s.10, s.11,
-                 s.12, s.13, s.14, s.15)
-            return UUID(uuid: s)
-        }()
+        // Stable content identity; count has no narrowing integer conversion.
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let payload = (try? encoder.encode(entries.sorted { $0.id.uuidString < $1.id.uuidString })) ?? Data()
+        let bytes = Array(SHA256.hash(data: payload).prefix(16))
+        let planID = UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
         return ActionPlan(
             id: planID,
             title: AtlasL10n.string("fileorganizer.section.plan.title"),
             items: items,
-            estimatedBytes: entries.map(\.bytes).reduce(0, +)
+            estimatedBytes: boundedByteTotal(entries.map(\.bytes))
         )
     }
 
@@ -1040,6 +1068,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
                 for targetPath in preparedTargetPaths {
                     if let mapping = try await trashSmartCleanTarget(at: targetPath) {
                         mappings.append(mapping)
+                        result.restoreMappingsByFindingID[selection.finding.id] = mappings
                     }
                 }
                 if mappings.isEmpty {
@@ -1121,13 +1150,6 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         let sourceURL = URL(fileURLWithPath: mapping.trashedPath).resolvingSymlinksInPath()
         let destinationURL = URL(fileURLWithPath: mapping.originalPath).resolvingSymlinksInPath()
         let fm = FileManager.default
-        // Idempotent restore (audit #12): a prior partial attempt may have
-        // already moved this file back (destination exists, source gone). Treat
-        // it as valid here so validateRestoreItems doesn't reject the whole
-        // batch before the no-op move in restoreRecoveryTarget runs.
-        if fm.fileExists(atPath: destinationURL.path), !fm.fileExists(atPath: sourceURL.path) {
-            return
-        }
         guard fm.fileExists(atPath: sourceURL.path) else {
             throw RecoveryRestoreFailure.executionUnavailable("Recovery source is no longer available on disk: \(sourceURL.path)")
         }
@@ -1148,50 +1170,13 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
     }
 
     private func restoreRecoveryTarget(_ mapping: RecoveryPathMapping) async throws {
-        let sourceURL = URL(fileURLWithPath: mapping.trashedPath).resolvingSymlinksInPath()
-        let destinationURL = URL(fileURLWithPath: mapping.originalPath).resolvingSymlinksInPath()
-
-        // Idempotent restore (audit #12): a prior partial attempt may have
-        // already moved this file back. If the destination exists and the
-        // source is gone, skip it — otherwise the already-restored file would
-        // raise a restoreConflict and block the entire batch on retry.
-        let fm = FileManager.default
-        if fm.fileExists(atPath: destinationURL.path), !fm.fileExists(atPath: sourceURL.path) {
-            // Traceability (final-audit): the skip is inferred from filesystem
-            // state, so log it for post-hoc investigation if the destination
-            // turns out to be an unrelated file.
-            await auditStore.append("Idempotent restore skip: source gone, assuming already restored → \(destinationURL.path)")
-            return
-        }
-
         try validateRestoreTarget(mapping)
-        if shouldUseHelperForSmartCleanTarget(destinationURL) {
-            guard let helperExecutor else {
-                throw RecoveryRestoreFailure.helperUnavailable("Bundled helper unavailable for recovery target: \(destinationURL.path)")
-            }
-            do {
-                let result = try await helperExecutor.perform(
-                    AtlasHelperAction(kind: .restoreItem, targetPath: sourceURL.path, destinationPath: destinationURL.path)
-                )
-                guard result.success else {
-                    throw recoveryRestoreFailure(fromHelperMessage: result.message)
-                }
-            } catch let failure as RecoveryRestoreFailure {
-                throw failure
-            } catch let clientError as AtlasHelperClientError {
-                switch clientError {
-                case .helperUnavailable:
-                    throw RecoveryRestoreFailure.helperUnavailable(clientError.localizedDescription)
-                case .encodingFailed, .decodingFailed, .invocationFailed:
-                    throw RecoveryRestoreFailure.executionUnavailable(clientError.localizedDescription)
-                }
-            } catch {
-                throw RecoveryRestoreFailure.executionUnavailable(error.localizedDescription)
-            }
-            return
-        }
-        try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
+        let source = try AtlasFileSafetyPolicy.expanded(mapping.trashedPath, homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser)
+        let destination = try AtlasFileSafetyPolicy.expanded(mapping.originalPath, homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser)
+        let intent = AtlasFileOperationIntent(entryID: UUID(), kind: .restore, sourcePath: source.path,
+            destinationPath: destination.path, expectedIdentity: try AtlasFileIdentityReader.read(source))
+        let context = AtlasFilePolicyContext(recoveryMappings: [source.path: destination.path])
+        _ = try AtlasFileMover.moveWithoutReplacing(AtlasFileSafetyPolicy.validate(intent, context: context))
     }
 
     private func recoveryRestoreFailure(fromHelperMessage message: String) -> RecoveryRestoreFailure {
@@ -1407,10 +1392,10 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         let selectedFindings: [Finding]
 
         if findingIDs.isEmpty {
-            selectedFindings = state.snapshot.findings
+            selectedFindings = []
         } else {
             let selected = state.snapshot.findings.filter { findingIDs.contains($0.id) }
-            selectedFindings = selected.isEmpty ? state.snapshot.findings : selected
+            selectedFindings = selected
         }
 
         let items = selectedFindings.map { finding in
@@ -1424,7 +1409,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
             )
         }
 
-        let estimatedBytes = selectedFindings.map(\.bytes).reduce(0, +)
+        let estimatedBytes = boundedByteTotal(selectedFindings.map(\.bytes))
 
         return ActionPlan(
             title: AtlasL10n.string(selectedFindings.count == 1 ? "infrastructure.plan.review.one" : "infrastructure.plan.review.other", language: state.settings.language, selectedFindings.count),

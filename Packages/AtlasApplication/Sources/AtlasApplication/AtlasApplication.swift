@@ -416,8 +416,8 @@ public struct AtlasWorkspaceController: Sendable {
         }
     }
 
-    public func executePlan(planID: UUID) async throws -> AtlasTaskActionOutput {
-        let request = ExecutePlanUseCase().makeRequest(planID: planID)
+    public func executePlan(planID: UUID, executionSelection: AtlasExecutionSelection? = nil) async throws -> AtlasTaskActionOutput {
+        let request = ExecutePlanUseCase().makeRequest(planID: planID, executionSelection: executionSelection)
         let result = try await worker.submit(request)
 
         switch result.response.response {
@@ -490,8 +490,8 @@ public struct AtlasWorkspaceController: Sendable {
         }
     }
 
-    public func executeAppUninstall(appID: UUID, planID: UUID? = nil) async throws -> AtlasTaskActionOutput {
-        let request = ExecuteAppUninstallUseCase().makeRequest(appID: appID, planID: planID)
+    public func executeAppUninstall(appID: UUID, planID: UUID? = nil, executionSelection: AtlasExecutionSelection? = nil) async throws -> AtlasTaskActionOutput {
+        let request = ExecuteAppUninstallUseCase().makeRequest(appID: appID, planID: planID, executionSelection: executionSelection)
         let result = try await worker.submit(request)
 
         switch result.response.response {
@@ -572,8 +572,8 @@ public struct AtlasWorkspaceController: Sendable {
         }
     }
 
-    public func fileOrganizerExecutePlan(planID: UUID) async throws -> AtlasFileOrganizerExecuteOutput {
-        let request = FileOrganizerExecutePlanUseCase().makeRequest(planID: planID)
+    public func fileOrganizerExecutePlan(planID: UUID, executionSelection: AtlasExecutionSelection? = nil) async throws -> AtlasFileOrganizerExecuteOutput {
+        let request = FileOrganizerExecutePlanUseCase().makeRequest(planID: planID, executionSelection: executionSelection)
         let result = try await worker.submit(request)
 
         switch result.response.response {
@@ -699,8 +699,8 @@ public struct PreviewPlanUseCase: Sendable {
 public struct ExecutePlanUseCase: Sendable {
     public init() {}
 
-    public func makeRequest(planID: UUID) -> AtlasRequestEnvelope {
-        AtlasRequestEnvelope(command: .executePlan(planID: planID))
+    public func makeRequest(planID: UUID, executionSelection: AtlasExecutionSelection? = nil) -> AtlasRequestEnvelope {
+        AtlasRequestEnvelope(command: .executePlan(planID: planID), executionSelection: executionSelection)
     }
 }
 
@@ -731,8 +731,8 @@ public struct PreviewAppUninstallUseCase: Sendable {
 public struct ExecuteAppUninstallUseCase: Sendable {
     public init() {}
 
-    public func makeRequest(appID: UUID, planID: UUID? = nil) -> AtlasRequestEnvelope {
-        AtlasRequestEnvelope(command: .executeAppUninstall(appID: appID, planID: planID))
+    public func makeRequest(appID: UUID, planID: UUID? = nil, executionSelection: AtlasExecutionSelection? = nil) -> AtlasRequestEnvelope {
+        AtlasRequestEnvelope(command: .executeAppUninstall(appID: appID, planID: planID), executionSelection: executionSelection)
     }
 }
 
@@ -879,8 +879,8 @@ public struct FileOrganizerPreviewPlanUseCase: Sendable {
 public struct FileOrganizerExecutePlanUseCase: Sendable {
     public init() {}
 
-    public func makeRequest(planID: UUID) -> AtlasRequestEnvelope {
-        AtlasRequestEnvelope(command: .fileOrganizerExecutePlan(planID: planID))
+    public func makeRequest(planID: UUID, executionSelection: AtlasExecutionSelection? = nil) -> AtlasRequestEnvelope {
+        AtlasRequestEnvelope(command: .fileOrganizerExecutePlan(planID: planID), executionSelection: executionSelection)
     }
 }
 

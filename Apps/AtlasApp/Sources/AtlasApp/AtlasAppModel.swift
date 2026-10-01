@@ -794,7 +794,7 @@ final class AtlasAppModel: ObservableObject {
         let workflowSnapshot = workflowState(for: .smartClean)
 
         do {
-            let output = try await workspaceController.executePlan(planID: currentPlan.id)
+            let output = try await workspaceController.executePlan(planID: currentPlan.id, executionSelection: currentPlan.executionSelection)
             withAnimation(.snappy(duration: 0.24)) {
                 snapshot = output.snapshot
                 latestScanSummary = output.summary
@@ -1031,7 +1031,7 @@ final class AtlasAppModel: ObservableObject {
         latestAppRestoreRefreshStatus = nil
 
         do {
-            let output = try await workspaceController.executeAppUninstall(appID: appID, planID: currentAppPreview?.id)
+            let output = try await workspaceController.executeAppUninstall(appID: appID, planID: currentAppPreview?.id, executionSelection: currentAppPreview?.executionSelection)
             withAnimation(.snappy(duration: 0.24)) {
                 snapshot = output.snapshot
                 currentAppPreview = nil
@@ -1827,7 +1827,7 @@ final class AtlasAppModel: ObservableObject {
         clearExecution(.fileOrganizer)
 
         do {
-            let output = try await workspaceController.fileOrganizerExecutePlan(planID: currentFileOrganizerPlan.id)
+            let output = try await workspaceController.fileOrganizerExecutePlan(planID: currentFileOrganizerPlan.id, executionSelection: currentFileOrganizerPlan.executionSelection)
             let movedCount = output.movedCount
             let failedCount = output.failedCount
             // Total failure (audit #8): the worker accepted but moved nothing.

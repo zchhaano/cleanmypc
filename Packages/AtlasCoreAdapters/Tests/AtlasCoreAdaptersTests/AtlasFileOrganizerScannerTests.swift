@@ -691,3 +691,13 @@ extension AtlasFileOrganizerScannerTests {
         XCTAssertTrue(FileManager.default.fileExists(atPath: contents.appendingPathComponent("marker.txt").path))
     }
 }
+
+extension AtlasFileOrganizerScannerTests {
+    func testScanExceedingLimitFailsWithoutExecutablePartialResult() async throws {
+        for n in 0..<4 { try Data("file".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent("\(n).txt")) }
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent(), maximumEntries: 3)
+        do { _ = try await scanner.scanFolders([testDir]); XCTFail("A partial result must not be executable") } catch {}
+        XCTAssertEqual(AtlasExecutionLimits.maximumScanEntries, 100_000)
+        XCTAssertEqual(AtlasExecutionLimits.maximumMutationEntries, 1_000)
+    }
+}

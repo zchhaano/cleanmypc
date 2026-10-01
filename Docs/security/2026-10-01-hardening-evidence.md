@@ -36,3 +36,10 @@ Ruling: existing autofix suggestion test expected a low-disk message deliberatel
 RED: recursive package internals and direct package-interior roots reproduced. GREEN: scanner, smart-clean scope and shared FileSafety suites; Helper suite 3/3. Shared mover uses opened source-parent descriptors and no-replace rename. Deterministic ancestor replacement leaves the outside sentinel unchanged. Smart Clean narrows to cache/log descendants; services and generic ownership repair are unsupported.
 
 Ruling: permit only macOS's fixed /var, /tmp and /etc aliases in the descriptor walker; arbitrary symlinks remain rejected. Required because Foundation can retain /var in temporary paths whose final component did not exist at resolution time.
+
+## N2 / N3 interim closure
+
+- Registered previews bind canonical SHA-256 digests to immutable file identities and entry references; controllers and AppModel forward the typed selection. Empty selections do not mean select-all. Removed UInt16 narrowing and unchecked preview byte sums.
+- Default server-side native file mutations (including restore) are closed, independently of UI or environment settings. They remain closed pending the journal/recovery/Helper acceptance closure and VM evidence.
+- Smart Clean now accumulates mappings immediately at each successful file. Removed legacy same-name restore success inference; legacy restore uses no-replace FileSafety mover.
+- Actual targeted verification: registry 4, mutation default-closure 1, protocol 5; scanner limit suite 29. `N2-integration.log` and `N2-final.log` in isolated worktree logs. This does not establish crash durability or reopen production writes.

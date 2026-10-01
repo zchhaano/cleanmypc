@@ -1341,3 +1341,5 @@
 "glossary.evidence.definition" = "Atlas 扫到、但本次不会移除的文件。列出来不等于会移除。";
 "glossary.restorepoint.term" = "恢复点";
 "glossary.restorepoint.definition" = "执行前自动建立的可恢复位置。保留期内可以还原到原位置。";
+
+"security.mutation.unavailable" = "恢复安全验证完成前，暂不可更改文件。";

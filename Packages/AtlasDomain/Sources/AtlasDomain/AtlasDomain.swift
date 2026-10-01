@@ -464,6 +464,8 @@ public struct ActionItem: Identifiable, Codable, Hashable, Sendable {
 }
 
 public struct ActionPlan: Identifiable, Codable, Hashable, Sendable {
+    public var executionDigest: String?
+    public var executionEntryIDs: [UUID]?
     public var id: UUID
     public var title: String
     public var items: [ActionItem]

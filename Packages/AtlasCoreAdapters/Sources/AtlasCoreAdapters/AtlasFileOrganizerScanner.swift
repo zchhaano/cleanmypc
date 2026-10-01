@@ -4,8 +4,9 @@ import AtlasFileSafety
 import Foundation
 
 public struct AtlasFileOrganizerScanner: AtlasFileOrganizerScanning, Sendable {
+    private let maximumEntries: Int
     private let homeDirectoryURL: URL
-    public init(homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser) { self.homeDirectoryURL = homeDirectoryURL }
+    public init(homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser, maximumEntries: Int = AtlasExecutionLimits.maximumScanEntries) { self.homeDirectoryURL = homeDirectoryURL; self.maximumEntries = min(maximumEntries, AtlasExecutionLimits.maximumScanEntries) }
 
     public func scanFolders(_ paths: [String], destinationBasePath: String = "~/Organized", recursive: Bool = false) async throws -> FileOrganizerScanResult {
         let fm = FileManager.default
@@ -83,6 +84,7 @@ public struct AtlasFileOrganizerScanner: AtlasFileOrganizerScanning, Sendable {
                 let basePath = destinationBasePath.hasSuffix("/") ? String(destinationBasePath.dropLast()) : destinationBasePath
                 let proposedDestination = "\(basePath)/\(category.folderName)/\(safeFileName)"
 
+                guard entries.count < maximumEntries else { throw AtlasFileSafetyError.unsafePath("Scan exceeds the candidate limit") }
                 entries.append(FileOrganizerEntry(
                     path: displayPath,
                     fileName: fileName,
@@ -94,7 +96,12 @@ public struct AtlasFileOrganizerScanner: AtlasFileOrganizerScanning, Sendable {
         }
 
         let categoryCounts = Dictionary(grouping: entries, by: \.category).mapValues(\.count)
-        let totalBytes = entries.map(\.bytes).reduce(0, +)
+        var totalBytes: Int64 = 0
+        for entry in entries {
+            let sum = totalBytes.addingReportingOverflow(entry.bytes)
+            guard !sum.overflow else { throw AtlasFileSafetyError.unsupportedObject }
+            totalBytes = sum.partialValue
+        }
 
         return FileOrganizerScanResult(
             entries: entries,

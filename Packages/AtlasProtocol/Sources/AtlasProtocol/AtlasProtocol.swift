@@ -2,7 +2,7 @@ import AtlasDomain
 import Foundation
 
 public enum AtlasProtocolVersion {
-    public static let current = "0.3.2"
+    public static let current = "0.4.0"
 }
 
 public struct AtlasCapabilityStatus: Codable, Hashable, Sendable {
@@ -43,12 +43,14 @@ public enum AtlasCommand: Codable, Hashable, Sendable {
 public struct AtlasRequestEnvelope: Codable, Hashable, Sendable, Identifiable {
     public var id: UUID
     public var issuedAt: Date
+    public var executionSelection: AtlasExecutionSelection?
     public var command: AtlasCommand
 
-    public init(id: UUID = UUID(), issuedAt: Date = Date(), command: AtlasCommand) {
+    public init(id: UUID = UUID(), issuedAt: Date = Date(), command: AtlasCommand, executionSelection: AtlasExecutionSelection? = nil) {
         self.id = id
         self.issuedAt = issuedAt
         self.command = command
+        self.executionSelection = executionSelection
     }
 }
 

@@ -1338,3 +1338,5 @@
 "glossary.evidence.definition" = "Files Atlas found but will not remove in this run. Listing them does not remove them.";
 "glossary.restorepoint.term" = "Restore point";
 "glossary.restorepoint.definition" = "A recoverable position created before a run. You can restore to the original path while the retention period is open.";
+
+"security.mutation.unavailable" = "File changes are unavailable until recovery safety checks are complete.";
