@@ -1,17 +1,19 @@
 import AtlasApplication
 import AtlasDomain
+import AtlasFileSafety
 import Foundation
 
 public struct AtlasFileOrganizerScanner: AtlasFileOrganizerScanning, Sendable {
-    public init() {}
+    private let homeDirectoryURL: URL
+    public init(homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser) { self.homeDirectoryURL = homeDirectoryURL }
 
     public func scanFolders(_ paths: [String], destinationBasePath: String = "~/Organized", recursive: Bool = false) async throws -> FileOrganizerScanResult {
         let fm = FileManager.default
         var entries: [FileOrganizerEntry] = []
 
         let enumeratorOptions: FileManager.DirectoryEnumerationOptions = recursive
-            ? [.skipsHiddenFiles]
-            : [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+            ? [.skipsHiddenFiles, .skipsPackageDescendants]
+            : [.skipsHiddenFiles, .skipsSubdirectoryDescendants, .skipsPackageDescendants]
 
         // Dedup input roots (preserve order) so the same folder selected twice
         // is only enumerated once. A per-file seen-set below additionally
@@ -29,15 +31,18 @@ public struct AtlasFileOrganizerScanner: AtlasFileOrganizerScanning, Sendable {
         var seenFiles: Set<String> = []
 
         for folderPath in orderedPaths {
-            let expandedPath = (folderPath as NSString).expandingTildeInPath
-            let baseURL = URL(fileURLWithPath: expandedPath)
+            let baseURL = try AtlasFileSafetyPolicy.expanded(folderPath, homeDirectoryURL: homeDirectoryURL)
+            _ = try AtlasFileSafetyPolicy.validateOrganizerRoot(baseURL, homeDirectoryURL: homeDirectoryURL)
+            let expandedPath = baseURL.path
             guard let enumerator = fm.enumerator(
                 at: baseURL,
                 includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey],
                 options: enumeratorOptions
-            ) else { continue }
+            ) else { throw AtlasFileSafetyError.unsafePath(baseURL.path) }
 
             for case let url as URL in enumerator {
+                if AtlasFileIdentityReader.hasPackageAncestor(url) { enumerator.skipDescendants(); continue }
+                guard (try? AtlasFileIdentityReader.read(url)) != nil else { enumerator.skipDescendants(); continue }
                 // Skip symlinks pointing outside the scanned directory
                 let resolvedPath = url.resolvingSymlinksInPath().path
                 guard resolvedPath.hasPrefix(expandedPath + "/") || resolvedPath == expandedPath else {
@@ -63,7 +68,7 @@ public struct AtlasFileOrganizerScanner: AtlasFileOrganizerScanning, Sendable {
                 let category = Self.classifyExtension(ext)
 
                 let fullPath = url.path
-                let homeDir = fm.homeDirectoryForCurrentUser.path
+                let homeDir = homeDirectoryURL.path
                 let displayPath: String
                 // Separator boundary (audit #2): require a "/" after home so a
                 // sibling like /Users/<user>_backup is not mis-tilde'd into an

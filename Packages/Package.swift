@@ -6,6 +6,7 @@ let package = Package(
     defaultLocalization: "zh-Hans",
     platforms: [.macOS(.v14)],
     products: [
+        .library(name: "AtlasFileSafety", targets: ["AtlasFileSafety"]),
         .library(name: "AtlasApplication", targets: ["AtlasApplication"]),
         .library(name: "AtlasCoreAdapters", targets: ["AtlasCoreAdapters"]),
         .library(name: "AtlasDesignSystem", targets: ["AtlasDesignSystem"]),
@@ -23,6 +24,8 @@ let package = Package(
         .library(name: "AtlasProtocol", targets: ["AtlasProtocol"]),
     ],
     targets: [
+        .target(name: "AtlasFileSafety", dependencies: ["AtlasDomain"], path: "AtlasFileSafety/Sources/AtlasFileSafety"),
+        .testTarget(name: "AtlasFileSafetyTests", dependencies: ["AtlasFileSafety", "AtlasDomain"], path: "AtlasFileSafety/Tests/AtlasFileSafetyTests"),
         .target(
             name: "AtlasDesignSystem",
             dependencies: ["AtlasDomain"],
@@ -46,12 +49,12 @@ let package = Package(
         ),
         .target(
             name: "AtlasInfrastructure",
-            dependencies: ["AtlasApplication", "AtlasDomain", "AtlasProtocol"],
+            dependencies: ["AtlasApplication", "AtlasDomain", "AtlasProtocol", "AtlasFileSafety"],
             path: "AtlasInfrastructure/Sources/AtlasInfrastructure"
         ),
         .target(
             name: "AtlasCoreAdapters",
-            dependencies: ["AtlasApplication", "AtlasDomain", "AtlasProtocol"],
+            dependencies: ["AtlasApplication", "AtlasDomain", "AtlasProtocol", "AtlasFileSafety"],
             path: "AtlasCoreAdapters/Sources/AtlasCoreAdapters",
             resources: [.copy("Resources/MoleRuntime")]
         ),
@@ -103,7 +106,7 @@ let package = Package(
         ),
         .testTarget(
             name: "AtlasApplicationTests",
-            dependencies: ["AtlasApplication", "AtlasDomain", "AtlasProtocol"],
+            dependencies: ["AtlasApplication", "AtlasDomain", "AtlasProtocol", "AtlasFileSafety"],
             path: "AtlasApplication/Tests/AtlasApplicationTests"
         ),
         .testTarget(

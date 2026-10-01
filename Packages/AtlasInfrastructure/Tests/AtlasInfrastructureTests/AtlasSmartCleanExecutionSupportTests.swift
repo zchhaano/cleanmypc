@@ -11,27 +11,27 @@ final class AtlasSmartCleanExecutionSupportTests: XCTestCase {
 
     func testRequiresHelperForSystemApplications() {
         let url = URL(fileURLWithPath: "/Applications/Xcode.app")
-        XCTAssertTrue(AtlasSmartCleanExecutionSupport.requiresHelper(for: url, homeDirectoryURL: home))
+        XCTAssertFalse(AtlasSmartCleanExecutionSupport.requiresHelper(for: url, homeDirectoryURL: home))
     }
 
     func testRequiresHelperForUserApplications() {
         let url = home.appendingPathComponent("Applications/MyApp.app")
-        XCTAssertTrue(AtlasSmartCleanExecutionSupport.requiresHelper(for: url, homeDirectoryURL: home))
+        XCTAssertFalse(AtlasSmartCleanExecutionSupport.requiresHelper(for: url, homeDirectoryURL: home))
     }
 
     func testRequiresHelperForLaunchAgents() {
         let url = URL(fileURLWithPath: "/Library/LaunchAgents/com.test.plist")
-        XCTAssertTrue(AtlasSmartCleanExecutionSupport.requiresHelper(for: url, homeDirectoryURL: home))
+        XCTAssertFalse(AtlasSmartCleanExecutionSupport.requiresHelper(for: url, homeDirectoryURL: home))
     }
 
     func testRequiresHelperForLaunchDaemons() {
         let url = URL(fileURLWithPath: "/Library/LaunchDaemons/com.test.plist")
-        XCTAssertTrue(AtlasSmartCleanExecutionSupport.requiresHelper(for: url, homeDirectoryURL: home))
+        XCTAssertFalse(AtlasSmartCleanExecutionSupport.requiresHelper(for: url, homeDirectoryURL: home))
     }
 
     func testRequiresHelperForUserLaunchAgents() {
         let url = home.appendingPathComponent("Library/LaunchAgents/com.test.plist")
-        XCTAssertTrue(AtlasSmartCleanExecutionSupport.requiresHelper(for: url, homeDirectoryURL: home))
+        XCTAssertFalse(AtlasSmartCleanExecutionSupport.requiresHelper(for: url, homeDirectoryURL: home))
     }
 
     func testDoesNotRequireHelperForCachePath() {
@@ -53,12 +53,12 @@ final class AtlasSmartCleanExecutionSupportTests: XCTestCase {
 
     func testXcodeDerivedDataIsTrashable() {
         let url = home.appendingPathComponent("Library/Developer/Xcode/DerivedData/MyProject")
-        XCTAssertTrue(AtlasSmartCleanExecutionSupport.isDirectlyTrashable(url, homeDirectoryURL: home))
+        XCTAssertFalse(AtlasSmartCleanExecutionSupport.isDirectlyTrashable(url, homeDirectoryURL: home))
     }
 
     func testNpmCacheIsTrashable() {
         let url = home.appendingPathComponent(".npm/_cacache")
-        XCTAssertTrue(AtlasSmartCleanExecutionSupport.isDirectlyTrashable(url, homeDirectoryURL: home))
+        XCTAssertFalse(AtlasSmartCleanExecutionSupport.isDirectlyTrashable(url, homeDirectoryURL: home))
     }
 
     func testHomeDirectoryItselfNotTrashable() {
@@ -77,19 +77,19 @@ final class AtlasSmartCleanExecutionSupportTests: XCTestCase {
 
     func testPycFileIsTrashable() {
         let url = home.appendingPathComponent("project/module.pyc")
-        XCTAssertTrue(AtlasSmartCleanExecutionSupport.isDirectlyTrashable(url, homeDirectoryURL: home))
+        XCTAssertFalse(AtlasSmartCleanExecutionSupport.isDirectlyTrashable(url, homeDirectoryURL: home))
     }
 
     func testSafeFragmentCache2IsTrashable() {
         let url = home.appendingPathComponent("Library/Application Support/Chrome/cache2")
-        XCTAssertTrue(AtlasSmartCleanExecutionSupport.isDirectlyTrashable(url, homeDirectoryURL: home))
+        XCTAssertFalse(AtlasSmartCleanExecutionSupport.isDirectlyTrashable(url, homeDirectoryURL: home))
     }
 
     // MARK: - Container Cleanup
 
     func testContainerCacheIsTrashable() {
         let url = home.appendingPathComponent("Library/Containers/com.app/Data/Library/Caches/cache.db")
-        XCTAssertTrue(AtlasSmartCleanExecutionSupport.isDirectlyTrashable(url, homeDirectoryURL: home))
+        XCTAssertFalse(AtlasSmartCleanExecutionSupport.isDirectlyTrashable(url, homeDirectoryURL: home))
     }
 
     func testContainerDataNotMatchingAllowedFragmentsNotTrashable() {
@@ -101,7 +101,7 @@ final class AtlasSmartCleanExecutionSupportTests: XCTestCase {
 
     func testSupportedTargetInApplications() {
         let url = URL(fileURLWithPath: "/Applications/Test.app")
-        XCTAssertTrue(AtlasSmartCleanExecutionSupport.isSupportedExecutionTarget(url, homeDirectoryURL: home))
+        XCTAssertFalse(AtlasSmartCleanExecutionSupport.isSupportedExecutionTarget(url, homeDirectoryURL: home))
     }
 
     func testSupportedTargetInCache() {
@@ -136,5 +136,15 @@ final class AtlasSmartCleanExecutionSupportTests: XCTestCase {
         let cachePath = home.appendingPathComponent("Library/Caches/com.test").path
         let finding = Finding(id: UUID(), title: "Mixed", detail: "", bytes: 100, risk: .safe, category: "System", targetPaths: [cachePath, "/unsupported/path"])
         XCTAssertFalse(AtlasSmartCleanExecutionSupport.isFindingExecutionSupported(finding, homeDirectoryURL: home))
+    }
+}
+
+extension AtlasSmartCleanExecutionSupportTests {
+    func testCacheNamesDoNotAuthorizeUnrelatedUserData() {
+        let home = URL(fileURLWithPath: "/Users/security-fixture")
+        for path in ["Documents/GPUCache/report.txt", "Library/Caches", "Library/Logs", "Library/CachesBackup/data", "Library/LaunchAgents/job.plist", "Documents/file.pyc"] {
+            XCTAssertFalse(AtlasSmartCleanExecutionSupport.isDirectlyTrashable(home.appendingPathComponent(path), homeDirectoryURL: home), path)
+        }
+        XCTAssertTrue(AtlasSmartCleanExecutionSupport.isDirectlyTrashable(home.appendingPathComponent("Library/Caches/vendor/file"), homeDirectoryURL: home))
     }
 }

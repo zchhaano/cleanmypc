@@ -1,5 +1,6 @@
 import AtlasApplication
 import AtlasDomain
+import AtlasFileSafety
 import AtlasProtocol
 import Foundation
 
@@ -17,6 +18,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
     private let nowProvider: @Sendable () -> Date
     private let allowProviderFailureFallback: Bool
     private let allowStateOnlyCleanExecution: Bool
+    private var organizerRoots: [URL] = []
     private var state: AtlasWorkspaceState
     private var pendingAppUninstallSnapshots: [UUID: AtlasAppUninstallEvidenceSnapshot] = [:]
 
@@ -611,6 +613,10 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
 
     private func fileOrganizerScan(using request: AtlasRequestEnvelope, taskID: UUID, folderPaths: [String]) async -> AtlasWorkerCommandResult {
         let entries: [FileOrganizerEntry]
+        organizerRoots = folderPaths.compactMap { raw in
+            guard let url = try? AtlasFileSafetyPolicy.expanded(raw, homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser) else { return nil }
+            return try? AtlasFileSafetyPolicy.validateOrganizerRoot(url)
+        }
 
         if let scanProvider = fileOrganizerScanProvider {
             do {
@@ -795,7 +801,6 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
                 destPath = candidate
             }
 
-            let destDir = (destPath as NSString).deletingLastPathComponent
             // Security boundary (audit #22): FileOrganizer destinations are
             // confined to the user's home. A traversing subfolder or a base
             // path configured outside home must never move a file into
@@ -806,8 +811,9 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
                 continue
             }
             do {
-                try fm.createDirectory(atPath: destDir, withIntermediateDirectories: true)
-                try fm.moveItem(atPath: sourcePath, toPath: destPath)
+                let intent = AtlasFileOperationIntent(entryID: entry.id, kind: .organize, sourcePath: sourcePath, destinationPath: destPath, expectedIdentity: try AtlasFileIdentityReader.read(sourceURL))
+                let operation = try AtlasFileSafetyPolicy.validate(intent, context: AtlasFilePolicyContext(organizerRoots: organizerRoots))
+                _ = try AtlasFileMover.moveWithoutReplacing(operation)
                 // Map display path back from resolved destPath. Separator
                 // boundary (audit #2): match scanner's homeDir + "/" convention.
                 let resolvedDisplay: String

@@ -3,17 +3,15 @@ import XCTest
 import AtlasProtocol
 
 final class AtlasPrivilegedHelperTests: XCTestCase {
-    func testRepairOwnershipSucceedsForAllowedCurrentUserFile() throws {
+    func testRepairOwnershipIsDisabledAndPreservesFile() throws {
         let root = makeAllowedRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
         let fileURL = root.appendingPathComponent("Sample.txt")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try Data("sample".utf8).write(to: fileURL)
-
         let executor = AtlasPrivilegedHelperActionExecutor(allowedRoots: [root.path])
-        let result = try executor.perform(AtlasHelperAction(kind: .repairOwnership, targetPath: fileURL.path))
-
-        XCTAssertTrue(result.success)
-        XCTAssertEqual(result.resolvedPath, fileURL.path)
+        XCTAssertThrowsError(try executor.perform(AtlasHelperAction(kind: .repairOwnership, targetPath: fileURL.path)))
+        XCTAssertEqual(try String(contentsOf: fileURL), "sample")
     }
 
     func testRestoreItemMovesTrashedFileBackToAllowedDestination() throws {

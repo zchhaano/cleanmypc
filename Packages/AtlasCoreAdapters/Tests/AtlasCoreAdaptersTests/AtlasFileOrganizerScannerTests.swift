@@ -19,7 +19,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
     // MARK: - Empty Directory
 
     func testScanEmptyDirectoryReturnsNoEntries() async throws {
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
         XCTAssertTrue(result.entries.isEmpty)
         XCTAssertEqual(result.totalFiles, 0)
@@ -32,7 +32,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
         let fileURL = URL(fileURLWithPath: testDir).appendingPathComponent("photo.png")
         try Data("fake-png".utf8).write(to: fileURL)
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         XCTAssertEqual(result.entries.count, 1)
@@ -58,7 +58,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
             try Data("data".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent(name))
         }
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         XCTAssertEqual(result.entries.count, 8)
@@ -82,7 +82,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
         try FileManager.default.createDirectory(at: subDir, withIntermediateDirectories: true)
         try Data("nested".utf8).write(to: subDir.appendingPathComponent("nested.txt"))
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir], recursive: false)
 
         XCTAssertEqual(result.entries.count, 1)
@@ -99,7 +99,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
         try FileManager.default.createDirectory(at: subDir, withIntermediateDirectories: true)
         try Data("nested".utf8).write(to: subDir.appendingPathComponent("nested.txt"))
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir], recursive: true)
 
         XCTAssertEqual(result.entries.count, 2)
@@ -117,7 +117,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
         let hiddenFile = URL(fileURLWithPath: testDir).appendingPathComponent(".hidden")
         try Data("h".utf8).write(to: hiddenFile)
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         XCTAssertEqual(result.entries.count, 1)
@@ -129,7 +129,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
     func testCustomDestinationBasePath() async throws {
         try Data("data".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent("file.pdf"))
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir], destinationBasePath: "~/MyFiles")
 
         XCTAssertEqual(result.entries.count, 1)
@@ -140,7 +140,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
     func testDestinationPathStripsTrailingSlash() async throws {
         try Data("data".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent("img.png"))
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir], destinationBasePath: "~/Output/")
 
         XCTAssertEqual(result.entries.count, 1)
@@ -158,7 +158,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
         try Data("a".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent("a.png"))
         try Data("b".utf8).write(to: URL(fileURLWithPath: dir2.path).appendingPathComponent("b.pdf"))
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir, dir2.path])
 
         XCTAssertEqual(result.entries.count, 2)
@@ -167,10 +167,9 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
 
     // MARK: - Nonexistent Folder
 
-    func testScanNonexistentFolderReturnsEmpty() async throws {
-        let scanner = AtlasFileOrganizerScanner()
-        let result = try await scanner.scanFolders(["/nonexistent/path/that/does/not/exist"])
-        XCTAssertTrue(result.entries.isEmpty)
+    func testScanNonexistentFolderIsAnError() async throws {
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
+        do { _ = try await scanner.scanFolders(["/nonexistent/path/that/does/not/exist"]); XCTFail("Invalid roots must not look like an empty successful scan") } catch {}
     }
 
     // MARK: - Total Bytes
@@ -179,7 +178,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
         try Data("12345".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent("a.txt"))
         try Data("1234567890".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent("b.txt"))
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         XCTAssertEqual(result.totalBytes, 5 + 10)
@@ -192,7 +191,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
             try Data("x".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent(name))
         }
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         XCTAssertEqual(result.categoryCounts[.images], 2)
@@ -209,7 +208,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
         try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
         try Data("dup".utf8).write(to: child.appendingPathComponent("note.txt"))
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([parent.path, child.path], recursive: true)
 
         XCTAssertEqual(result.entries.count, 1, "shared file must be emitted once across overlapping roots")
@@ -218,7 +217,7 @@ final class AtlasFileOrganizerScannerTests: XCTestCase {
 
     func testScanDeduplicatesIdenticalFolderInputs() async throws {
         try Data("x".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent("a.png"))
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir, testDir], recursive: false)
         XCTAssertEqual(result.entries.count, 1)
     }
@@ -371,7 +370,7 @@ extension AtlasFileOrganizerScannerTests {
         let link = URL(fileURLWithPath: testDir).appendingPathComponent("link.png")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         // Symlink resolves to same path prefix → included (not skipped)
@@ -387,7 +386,7 @@ extension AtlasFileOrganizerScannerTests {
         let link = URL(fileURLWithPath: testDir).appendingPathComponent("outside_link")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outsideDir)
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         // Symlink to outside should not produce entries
@@ -402,7 +401,7 @@ extension AtlasFileOrganizerScannerTests {
             try Data("x".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent(name))
         }
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         XCTAssertEqual(result.entries.count, 3)
@@ -417,7 +416,7 @@ extension AtlasFileOrganizerScannerTests {
     func testFileWithNoExtensionClassifiesAsOther() async throws {
         try Data("data".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent("Makefile"))
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         XCTAssertEqual(result.entries.count, 1)
@@ -434,7 +433,7 @@ extension AtlasFileOrganizerScannerTests {
             try Data("f\(i)".utf8).write(to: currentDir.appendingPathComponent("file\(i).txt"))
         }
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir], recursive: true)
 
         XCTAssertEqual(result.entries.count, 5)
@@ -445,7 +444,7 @@ extension AtlasFileOrganizerScannerTests {
     func testFilenameWithSpaces() async throws {
         try Data("x".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent("my photo.png"))
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         XCTAssertEqual(result.entries.count, 1)
@@ -455,7 +454,7 @@ extension AtlasFileOrganizerScannerTests {
     func testFilenameWithUnicode() async throws {
         try Data("x".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent("截图_2024.png"))
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         XCTAssertEqual(result.entries.count, 1)
@@ -465,7 +464,7 @@ extension AtlasFileOrganizerScannerTests {
     func testFilenameWithMultipleDots() async throws {
         try Data("x".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent("archive.tar.gz"))
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         XCTAssertEqual(result.entries.count, 1)
@@ -479,7 +478,7 @@ extension AtlasFileOrganizerScannerTests {
             try Data("x".utf8).write(to: URL(fileURLWithPath: testDir).appendingPathComponent("file\(i).txt"))
         }
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir])
 
         XCTAssertEqual(result.entries.count, 500)
@@ -495,7 +494,7 @@ extension AtlasFileOrganizerScannerTests {
             try Data("x".utf8).write(to: dir.appendingPathComponent("same.txt"))
         }
 
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([testDir], recursive: true)
 
         XCTAssertEqual(result.entries.count, 2)
@@ -507,16 +506,16 @@ extension AtlasFileOrganizerScannerTests {
     // MARK: Tilde Expansion in Folder Paths
 
     func testScanWithTildePath() async throws {
-        let scanner = AtlasFileOrganizerScanner()
-        // ~/Desktop should exist and be scannable (may have 0 or more files)
-        let result = try await scanner.scanFolders(["~/Desktop"])
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
+        let relative = "~/" + URL(fileURLWithPath: testDir).lastPathComponent
+        let result = try await scanner.scanFolders([relative])
         XCTAssertNotNil(result)
     }
 
     // MARK: Empty Folder List
 
     func testScanEmptyFolderList() async throws {
-        let scanner = AtlasFileOrganizerScanner()
+        let scanner = AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent())
         let result = try await scanner.scanFolders([])
         XCTAssertTrue(result.entries.isEmpty)
     }
@@ -662,5 +661,33 @@ extension AtlasFileOrganizerClassifierTests {
         XCTAssertEqual(result[0].category, .code, ".ts stays code (UTType conforms to movie)")
         XCTAssertEqual(result[1].category, .installers, ".dmg stays installers (UTType conforms to archive)")
         XCTAssertEqual(result[2].category, .installers, ".pkg stays installers")
+    }
+}
+
+extension AtlasFileOrganizerScannerTests {
+    func testRecursiveScanNeverEmitsPackageInternals() async throws {
+        let root = URL(fileURLWithPath: testDir)
+        for name in ["Example.app", "Photos.photoslibrary", "Sheet.pages", "Code.framework", "Mixed.APP"] {
+            let contents = root.appendingPathComponent(name).appendingPathComponent("Contents")
+            try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+            try Data("protected".utf8).write(to: contents.appendingPathComponent("marker.txt"))
+        }
+        try Data("normal".utf8).write(to: root.appendingPathComponent("ordinary.txt"))
+        let result = try await AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent()).scanFolders([testDir], recursive: true)
+        XCTAssertEqual(result.entries.map(\.fileName), ["ordinary.txt"])
+        for name in ["Example.app", "Photos.photoslibrary", "Sheet.pages", "Code.framework", "Mixed.APP"] {
+            XCTAssertEqual(try String(contentsOf: root.appendingPathComponent(name).appendingPathComponent("Contents/marker.txt")), "protected")
+        }
+    }
+
+    func testDirectPackageInteriorSelectionIsRejected() async throws {
+        let contents = URL(fileURLWithPath: testDir).appendingPathComponent("Example.app/Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        try Data("protected".utf8).write(to: contents.appendingPathComponent("marker.txt"))
+        do {
+            _ = try await AtlasFileOrganizerScanner(homeDirectoryURL: URL(fileURLWithPath: testDir).deletingLastPathComponent()).scanFolders([contents.path], recursive: true)
+            XCTFail("Package interior must not be an organizer root")
+        } catch {}
+        XCTAssertTrue(FileManager.default.fileExists(atPath: contents.appendingPathComponent("marker.txt").path))
     }
 }

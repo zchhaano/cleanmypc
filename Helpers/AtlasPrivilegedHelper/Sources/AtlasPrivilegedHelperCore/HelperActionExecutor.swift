@@ -30,6 +30,7 @@ public struct AtlasPrivilegedHelperActionExecutor {
     }
 
     public func perform(_ action: AtlasHelperAction) throws -> AtlasHelperActionResult {
+        guard action.kind != .removeLaunchService && action.kind != .repairOwnership else { throw HelperValidationError.pathNotAllowed(action.targetPath) }
         let targetURL = URL(fileURLWithPath: action.targetPath).resolvingSymlinksInPath()
         let destinationURL = action.destinationPath.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() }
         try validate(action: action, targetURL: targetURL, destinationURL: destinationURL)
@@ -144,7 +145,7 @@ public struct AtlasPrivilegedHelperActionExecutor {
 
         let isAllowed = { (url: URL) in
             allowedRoots.contains { root in
-                url.path == root || url.path.hasPrefix(root + "/")
+                url.path.hasPrefix(root + "/")
             }
         }
 
@@ -155,7 +156,7 @@ public struct AtlasPrivilegedHelperActionExecutor {
             }
         case .restoreItem:
             let trashRoot = homeDirectoryURL.appendingPathComponent(".Trash", isDirectory: true).path
-            guard targetURL.path == trashRoot || targetURL.path.hasPrefix(trashRoot + "/") else {
+            guard targetURL.path.hasPrefix(trashRoot + "/") else {
                 throw HelperValidationError.pathNotAllowed(targetURL.path)
             }
             guard let destinationURL else {

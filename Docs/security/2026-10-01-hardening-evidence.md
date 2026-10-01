@@ -30,3 +30,9 @@ VM PAM/real mount, UI, CI run and release installation evidence are pending. Cap
 C1 GREEN: 140 Bats cases, 0 failures (one legacy analyze-binary availability skip); all 14 new safety/parity cases executed. shellcheck and runtime parity passed. Obsolete positive tests for removed destructive capabilities were replaced by execution-side safety regressions; container tests now assert preservation instead of deletion.
 
 Ruling: existing autofix suggestion test expected a low-disk message deliberately suppressed when a large-cache suggestion exists; corrected it to assert the actual cache suggestion, without changing production behavior.
+
+## N1
+
+RED: recursive package internals and direct package-interior roots reproduced. GREEN: scanner, smart-clean scope and shared FileSafety suites; Helper suite 3/3. Shared mover uses opened source-parent descriptors and no-replace rename. Deterministic ancestor replacement leaves the outside sentinel unchanged. Smart Clean narrows to cache/log descendants; services and generic ownership repair are unsupported.
+
+Ruling: permit only macOS's fixed /var, /tmp and /etc aliases in the descriptor walker; arbitrary symlinks remain rejected. Required because Foundation can retain /var in temporary paths whose final component did not exist at resolution time.
