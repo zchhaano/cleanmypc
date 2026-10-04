@@ -94,6 +94,11 @@ _clean_mail_downloads() {
 
 # Remove old Google Chrome versions while keeping Current.
 clean_chrome_old_versions() {
+    if [[ "${DRY_RUN:-false}" != "true" ]]; then
+        printf "%s\n" "Skipped: file cleanup is disabled by the Atlas safety policy."
+        return 0
+    fi
+
     local -a app_paths=(
         "/Applications/Google Chrome.app"
         "$HOME/Applications/Google Chrome.app"
@@ -174,6 +179,11 @@ clean_chrome_old_versions() {
 
 # Remove old Microsoft Edge versions while keeping Current.
 clean_edge_old_versions() {
+    if [[ "${DRY_RUN:-false}" != "true" ]]; then
+        printf "%s\n" "Skipped: file cleanup is disabled by the Atlas safety policy."
+        return 0
+    fi
+
     # Allow override for testing
     local -a app_paths
     if [[ -n "${MOLE_EDGE_APP_PATHS:-}" ]]; then
@@ -260,6 +270,11 @@ clean_edge_old_versions() {
 
 # Remove old Microsoft EdgeUpdater versions while keeping latest.
 clean_edge_updater_old_versions() {
+    if [[ "${DRY_RUN:-false}" != "true" ]]; then
+        printf "%s\n" "Skipped: file cleanup is disabled by the Atlas safety policy."
+        return 0
+    fi
+
     local updater_dir="$HOME/Library/Application Support/Microsoft/EdgeUpdater/apps/msedge-stable"
     [[ -d "$updater_dir" ]] || return 0
 
@@ -473,6 +488,11 @@ clean_app_caches() {
 
 # Process a single container cache directory.
 process_container_cache() {
+    if [[ "${DRY_RUN:-false}" != "true" ]]; then
+        printf "%s\n" "Skipped: file cleanup is disabled by the Atlas safety policy."
+        return 0
+    fi
+
     local container_dir="$1"
     [[ -d "$container_dir" ]] || return 0
     [[ -L "$container_dir" ]] && return 0
@@ -786,6 +806,11 @@ app_support_item_size_bytes() {
 
 # Application Support logs/caches.
 clean_application_support_logs() {
+    if [[ "${DRY_RUN:-false}" != "true" ]]; then
+        printf "%s\n" "Skipped: file cleanup is disabled by the Atlas safety policy."
+        return 0
+    fi
+
     if [[ ! -d "$HOME/Library/Application Support" ]] || ! ls "$HOME/Library/Application Support" > /dev/null 2>&1; then
         note_activity
         echo -e "  ${GRAY}${ICON_WARNING}${NC} Skipped: No permission to access Application Support"

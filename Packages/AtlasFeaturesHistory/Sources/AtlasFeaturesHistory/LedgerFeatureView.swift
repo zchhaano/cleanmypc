@@ -411,8 +411,8 @@ public enum LedgerFilter: String, CaseIterable, Identifiable {
     public func matches(recovery item: RecoveryItem) -> Bool {
         switch self {
         case .all: return true
-        case .recoverable: return !item.isExpired
-        case .archive: return item.isExpired
+        case .recoverable: return item.isRestorable
+        case .archive: return !item.isRestorable
         }
     }
 }

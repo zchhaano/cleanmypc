@@ -76,6 +76,8 @@ public final class AtlasOperationJournal: @unchecked Sendable {
         guard let p else { guard r.state == .planned else { throw AtlasJournalError.invalidTransition }; return }
         guard r.requestID == p.requestID, r.planID == p.planID, r.planDigest == p.planDigest, r.entryID == p.entryID,
               r.findingID == p.findingID, r.kind == p.kind, r.sourcePath == p.sourcePath, r.sourceIdentity == p.sourceIdentity else { throw AtlasJournalError.corrupt }
+        if p.restoreRequestID != nil { guard r.restoreRequestID == p.restoreRequestID else { throw AtlasJournalError.corrupt } }
+        if r.restoreRequestID != p.restoreRequestID { guard p.state == .moved && r.state == .restorePlanned else { throw AtlasJournalError.corrupt } }
         let allowed: [AtlasOperationState: Set<AtlasOperationState>] = [
             .planned: [.moved, .failed, .reconciliationRequired], .moved: [.restorePlanned, .reconciliationRequired],
             .restorePlanned: [.restored, .reconciliationRequired], .reconciliationRequired: [], .failed: [], .restored: []]

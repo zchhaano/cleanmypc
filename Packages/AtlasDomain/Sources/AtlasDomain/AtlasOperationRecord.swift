@@ -21,6 +21,7 @@ public struct AtlasOperationRecord: Codable, Hashable, Sendable {
     public var timestamp: Date
     public var state: AtlasOperationState
     public var errorCode: String?
+    public var restoreRequestID: UUID?
     public init(operationID: UUID = UUID(), requestID: UUID, planID: UUID, planDigest: String, policyRevision: Int = 1,
         entryID: UUID, findingID: UUID? = nil, kind: AtlasFileOperationKind, sourcePath: String, destinationPath: String? = nil,
         sourceIdentity: AtlasFileIdentity, state: AtlasOperationState = .planned) {
@@ -34,12 +35,17 @@ public struct AtlasRequestStatus: Codable, Hashable, Sendable {
     public let requestID: UUID
     public let operations: [AtlasOperationRecord]
     public let selection: AtlasExecutionSelection?
+    public let selectedOperationIDs: [UUID]?
+    public var unstartedOperationIDs: [UUID] {
+        let started = Set(operations.map(\.operationID))
+        return selectedOperationIDs?.filter { !started.contains($0) } ?? []
+    }
     public var unstartedEntryIDs: [UUID] {
         let started = Set(operations.map(\.entryID))
         return selection?.selectedEntryIDs.filter { !started.contains($0) } ?? []
     }
-    public var requiresReconciliation: Bool { operations.isEmpty || operations.contains { [.planned, .restorePlanned, .reconciliationRequired].contains($0.state) } }
-    public init(requestID: UUID, operations: [AtlasOperationRecord], selection: AtlasExecutionSelection? = nil) { self.requestID = requestID; self.operations = operations; self.selection = selection }
+    public var requiresReconciliation: Bool { operations.isEmpty || !unstartedEntryIDs.isEmpty || !unstartedOperationIDs.isEmpty || operations.contains { [.planned, .restorePlanned, .reconciliationRequired].contains($0.state) } }
+    public init(requestID: UUID, operations: [AtlasOperationRecord], selection: AtlasExecutionSelection? = nil, selectedOperationIDs: [UUID]? = nil) { self.requestID = requestID; self.operations = operations; self.selection = selection; self.selectedOperationIDs = selectedOperationIDs }
 }
 
 public enum AtlasSafetyCapabilities {

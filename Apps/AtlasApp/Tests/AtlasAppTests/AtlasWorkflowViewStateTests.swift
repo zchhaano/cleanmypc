@@ -129,9 +129,11 @@ final class AtlasWorkflowViewStateTests: XCTestCase {
 
     func testSmartCleanScanCompletionAssignsNumberAndReceipt() async throws {
         let store = InMemoryLedgerNumberStore()
+        let repository = makeRepository()
         let model = makeModel(
+            repository: repository,
             workerService: AtlasScaffoldWorkerService(
-                repository: makeRepository(),
+                repository: repository,
                 smartCleanScanProvider: ScanFixtureProvider(),
                 allowStateOnlyCleanExecution: true
             ),
@@ -235,22 +237,26 @@ final class AtlasWorkflowViewStateTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeModel(
+        repository suppliedRepository: AtlasWorkspaceRepository? = nil,
         workerService: (any AtlasWorkerServing)? = nil,
         ledgerNumberStore: any AtlasLedgerNumberStoring
     ) -> AtlasAppModel {
-        AtlasAppModel(
-            repository: makeRepository(),
-            workerService: workerService ?? AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true),
+        let repository = suppliedRepository ?? makeRepository()
+        return AtlasAppModel(
+            repository: repository,
+            workerService: workerService ?? AtlasScaffoldWorkerService(repository: repository, allowStateOnlyCleanExecution: true),
             ledgerNumberStore: ledgerNumberStore
         )
     }
 
     private func makeRepository() -> AtlasWorkspaceRepository {
-        AtlasWorkspaceRepository(
+        let repository = AtlasWorkspaceRepository(
             stateFileURL: FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
                 .appendingPathComponent("workspace-state.json")
         )
+        addTeardownBlock { try? FileManager.default.removeItem(at: repository.directoryURL) }
+        return repository
     }
 
     private static func fixtureFindings() -> [Finding] {

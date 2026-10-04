@@ -46,14 +46,16 @@ public final class AtlasNativeMutationService: @unchecked Sendable {
         self.journal = try journal ?? AtlasOperationJournal(directoryURL: directoryURL)
         self.registry = registry; self.context = context; self.mutator = mutator
     }
-    public func execute(selection: AtlasExecutionSelection, requestID: UUID) async throws -> AtlasRequestStatus {
-        try await coordinator.withLease { _ in
+    public func execute(selection: AtlasExecutionSelection, requestID: UUID, commit: (@Sendable (AtlasMutationLease, AtlasRequestStatus) async throws -> Void)? = nil) async throws -> AtlasRequestStatus {
+        try await coordinator.withLease { lease in
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
             let selectionData = try encoder.encode(selection)
             let requestName = "request-\(requestID.uuidString).json"
             if let previous = try self.directory.readFile(requestName) {
                 guard previous == selectionData else { throw AtlasJournalError.invalidRequest }
-                return try self.status(requestID: requestID) // Unknown never authorizes a replay.
+                let status = try self.status(requestID: requestID)
+                try await commit?(lease, status)
+                return status // Unknown never authorizes a replay.
             }
             if self.registry.registeredPlan(id: selection.planID) == nil,
                let persisted = try? AtlasActionPlanRegistry.readPersistedPlan(directoryURL: self.directoryURL, id: selection.planID) {
@@ -90,15 +92,18 @@ public final class AtlasNativeMutationService: @unchecked Sendable {
                     break
                 }
             }
-            return try self.status(requestID: requestID)
+            let status = try self.status(requestID: requestID)
+            try await commit?(lease, status)
+            return status
         }
     }
     public func status(requestID: UUID) throws -> AtlasRequestStatus {
         var latest: [UUID: AtlasOperationRecord] = [:]
-        for record in try journal.replay() where record.requestID == requestID { latest[record.operationID] = record }
+        for record in try journal.replay() where record.requestID == requestID || record.restoreRequestID == requestID { latest[record.operationID] = record }
         let selection = try directory.readFile("request-\(requestID.uuidString).json").map {
             try JSONDecoder().decode(AtlasExecutionSelection.self, from: $0)
         }
-        return AtlasRequestStatus(requestID: requestID, operations: latest.values.sorted { $0.sequence < $1.sequence }, selection: selection)
+        let selectedOperations = try directory.readFile("restore-request-\(requestID.uuidString).json").map { try JSONDecoder().decode([UUID].self, from: $0) }
+        return AtlasRequestStatus(requestID: requestID, operations: latest.values.sorted { $0.sequence < $1.sequence }, selection: selection, selectedOperationIDs: selectedOperations)
     }
 }

@@ -25,6 +25,8 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
     private let mutationsEnabledForTesting: Bool
     private var didReconcile = false
     private var persistenceFailure: String?
+    private var transientSaveFailures: [UUID: String] = [:]
+    private var persistedState: AtlasWorkspaceState?
     private var state: AtlasWorkspaceState
     private var pendingAppUninstallSnapshots: [UUID: AtlasAppUninstallEvidenceSnapshot] = [:]
 
@@ -67,12 +69,15 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         self.allowProviderFailureFallback = false
         self.allowStateOnlyCleanExecution = false
         #endif
-        do { self.state = try repository.loadState() }
+        do { self.state = try repository.loadState(); self.persistedState = self.state }
+        catch AtlasJournalError.busy { self.state = .empty }
         catch { self.state = .empty; self.persistenceFailure = error.localizedDescription }
         AtlasL10n.setCurrentLanguage(self.state.settings.language)
     }
 
     public func submit(_ request: AtlasRequestEnvelope) async throws -> AtlasWorkerCommandResult {
+        // Durable status must remain readable even if the disposable snapshot cannot be saved.
+        if case .requestStatus = request.command { return try await process(request) }
         if let persistenceFailure {
             if !didReconcile, let inspection = try? AtlasOperationJournal(directoryURL: repository.directoryURL).inspect() {
                 didReconcile = true
@@ -87,7 +92,12 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
             do {
                 // Re-read under the repository lease at the first actual request; initialization may precede another process's save.
                 state = try repository.loadState()
+                persistedState = state
                 projectOperations(try await AtlasJournalReconciler(directoryURL: repository.directoryURL).reconcile())
+            }
+            catch AtlasJournalError.busy {
+                didReconcile = false
+                return rejectedResult(for: request, code: .executionUnavailable, reason: "Workspace is busy; retry the read-only request.")
             }
             catch {
                 if let inspection = try? AtlasOperationJournal(directoryURL: repository.directoryURL).inspect() {
@@ -99,8 +109,9 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
                 return rejectedResult(for: request, code: .executionUnavailable, reason: error.localizedDescription)
             }
         }
+        defer { transientSaveFailures.removeValue(forKey: request.id) }
         let result = try await process(request)
-        if let persistenceFailure {
+        if let persistenceFailure = persistenceFailure ?? transientSaveFailures[request.id] {
             var failed = result
             failed.response = AtlasResponseEnvelope(requestID: request.id, response: .rejected(code: .executionUnavailable, reason: persistenceFailure))
             return failed
@@ -169,9 +180,12 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
             var availability: AtlasRecoveryAvailability
             switch record.state {
             case .moved:
-                if let destination = record.destinationPath, let expected = record.destinationIdentity {
-                    let actual = try? AtlasFileIdentityReader.read(URL(fileURLWithPath: destination))
-                    availability = actual == expected ? .ready : (actual == nil ? .sourceMissing : .reconciliationRequired)
+                if let path = record.destinationPath {
+                    do {
+                        if let actual = try AtlasRecoveryExecutor.identityOrMissing(URL(fileURLWithPath: path)) {
+                            availability = actual == record.destinationIdentity ? .ready : .reconciliationRequired
+                        } else { availability = .sourceMissing }
+                    } catch { availability = .reconciliationRequired }
                 } else { availability = .reconciliationRequired }
             case .restored: availability = .restored
             case .planned, .restorePlanned, .reconciliationRequired: availability = .reconciliationRequired
@@ -196,26 +210,23 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
             guard !itemIDs.isEmpty, itemIDs.count <= AtlasExecutionLimits.maximumMutationEntries,
                   Set(itemIDs).count == itemIDs.count else { throw AtlasJournalError.invalidRequest }
             let executor = try AtlasRecoveryExecutor(directoryURL: repository.directoryURL)
+            var operationIDs: [UUID] = []
             for id in itemIDs {
                 guard let item = state.snapshot.recoveryItems.first(where: { $0.id == id }),
-                      let operationID = item.restoreMappings?.first?.operationID else { throw AtlasJournalError.invalidRequest }
-                guard !item.isExpired(asOf: nowProvider()) else {
-                    return rejectedResult(for: request, code: .restoreExpired, reason: AtlasL10n.string("security.recovery.unverified"))
-                }
-                let result = try await executor.restore(operationID: operationID, requestID: request.id)
-                if ![.restored, .alreadyRestored].contains(result.status) {
-                    if let index = state.snapshot.recoveryItems.firstIndex(where: { $0.id == id }) {
-                        state.snapshot.recoveryItems[index].recoveryAvailability = AtlasRecoveryAvailability(rawValue: result.status.rawValue) ?? .reconciliationRequired
-                    }
-                    await persistState(context: "restore failure")
-                    return rejectedResult(for: request, code: .executionUnavailable, reason: AtlasL10n.string("security.recovery." + result.status.rawValue))
-                }
+                      let operationID = item.restoreMappings?.first?.operationID, !item.isExpired(asOf: nowProvider()) else { throw AtlasJournalError.invalidRequest }
+                operationIDs.append(operationID)
+            }
+            let restored = try await executor.restoreBatch(operationIDs: operationIDs, requestID: request.id) { lease, _ in
+                try await self.publishRecoveryProjection(lease: lease, requestID: request.id)
+            }
+            if restored.count != operationIDs.count || restored.contains(where: { ![.restored, .alreadyRestored].contains($0.status) }) {
+                projectOperations(try AtlasOperationJournal(directoryURL: repository.directoryURL).replay())
+                return rejectedResult(for: request, code: .executionUnavailable, reason: AtlasL10n.string("security.recovery.reconciliationRequired"))
             }
             let records = try AtlasOperationJournal(directoryURL: repository.directoryURL).replay()
             var latest: [UUID: AtlasOperationRecord] = [:]
             for r in records { latest[r.operationID] = r }
             projectOperations(Array(latest.values))
-            await persistState(context: "restore journal projection")
             let run = TaskRun(kind: .restore, status: .completed, summary: AtlasL10n.string("security.restore.completed", itemIDs.count), startedAt: request.issuedAt, finishedAt: Date())
             return AtlasWorkerCommandResult(request: request, response: AtlasResponseEnvelope(requestID: request.id, response: .accepted(task: .init(taskID: run.id, kind: .restore))), events: [.init(event: .taskFinished(run))], snapshot: state.snapshot)
         case .executePlan: kind = .executePlan
@@ -245,16 +256,33 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         guard operations.allSatisfy({ $0.kind == expectedKind }) else { throw AtlasJournalError.invalidRequest }
         let service = try AtlasNativeMutationService(directoryURL: repository.directoryURL, registry: planRegistry,
             context: AtlasFilePolicyContext(organizerRoots: organizerRoots, allowedApplicationPaths: Set(state.snapshot.apps.map(\.bundlePath))))
-        status = try await service.execute(selection: selection, requestID: request.id)
-        projectOperations(status.operations)
-        let moved = status.operations.filter { $0.state == .moved }.count
+        status = try await service.execute(selection: selection, requestID: request.id) { lease, status in
+            await self.publishExecutionProjection(status, request: request, kind: kind, lease: lease)
+        }
+        let moved = status.operations.filter { [.moved, .restorePlanned, .restored].contains($0.state) }.count
         let failed = operations.count - moved
-        let summary = AtlasL10n.string("security.execution.result", moved, failed)
-        let run = TaskRun(kind: kind, status: failed == 0 ? .completed : .failed, summary: summary, startedAt: request.issuedAt, finishedAt: Date())
-        state.snapshot.taskRuns.insert(run, at: 0)
-        await persistState(context: "journal projection")
+        guard let run = state.snapshot.taskRuns.first(where: { $0.id == request.id }) else { throw AtlasJournalError.invalidRequest }
         return AtlasWorkerCommandResult(request: request, response: AtlasResponseEnvelope(requestID: request.id,
             response: .accepted(task: .init(taskID: run.id, kind: kind))), events: [.init(event: .taskFinished(run))], snapshot: state.snapshot, movedCount: moved, failedCount: failed)
+    }
+
+    private func publishRecoveryProjection(lease: AtlasMutationLease, requestID: UUID) async throws {
+        let records = try AtlasOperationJournal(directoryURL: repository.directoryURL).replay()
+        var latest: [UUID: AtlasOperationRecord] = [:]
+        for record in records { latest[record.operationID] = record }
+        projectOperations(Array(latest.values))
+        await persistState(context: "restore journal projection", lease: lease, requestID: requestID)
+    }
+    private func publishExecutionProjection(_ status: AtlasRequestStatus, request: AtlasRequestEnvelope, kind: TaskKind, lease: AtlasMutationLease) async {
+        projectOperations(status.operations)
+        if !state.snapshot.taskRuns.contains(where: { $0.id == request.id }) {
+            let moved = status.operations.filter { [.moved, .restorePlanned, .restored].contains($0.state) }.count
+            let failed = (status.selection?.selectedEntryIDs.count ?? status.operations.count) - moved
+            let run = TaskRun(id: request.id, kind: kind, status: failed == 0 ? .completed : .failed,
+                summary: AtlasL10n.string("security.execution.result", moved, failed), startedAt: request.issuedAt, finishedAt: Date())
+            state.snapshot.taskRuns.insert(run, at: 0)
+        }
+        await persistState(context: "journal projection", lease: lease, requestID: request.id)
     }
 
     private func healthSnapshot(using request: AtlasRequestEnvelope) async throws -> AtlasWorkerCommandResult {
@@ -271,7 +299,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         }
 
         state.snapshot.healthSnapshot = healthSnapshot
-        await persistState(context: "health snapshot")
+        await persistState(context: "health snapshot", requestID: request.id)
         let response = AtlasResponseEnvelope(requestID: request.id, response: .health(healthSnapshot))
         await auditStore.append("Collected health snapshot for request \(request.id.uuidString)")
         return AtlasWorkerCommandResult(request: request, response: response, events: [], snapshot: state.snapshot)
@@ -280,7 +308,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
     private func inspectPermissions(using request: AtlasRequestEnvelope) async -> AtlasWorkerCommandResult {
         let permissions = await permissionInspector.snapshot()
         state.snapshot.permissions = permissions
-        await persistState(context: "permission inspection")
+        await persistState(context: "permission inspection", requestID: request.id)
         let events = permissions.map { permission in
             AtlasEventEnvelope(event: .permissionUpdated(permission))
         }
@@ -355,7 +383,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         state.snapshot.taskRuns.insert(completedRun, at: 0)
         let previewPlan = makePreviewPlan(findingIDs: state.snapshot.findings.map(\.id))
         state.currentPlan = previewPlan
-        await persistState(context: "smart clean scan")
+        await persistState(context: "smart clean scan", requestID: request.id)
         let events = progressEvents + [AtlasEventEnvelope(event: .taskFinished(completedRun))]
         await auditStore.append("Completed Smart Clean scan \(taskID.uuidString)")
         return AtlasWorkerCommandResult(
@@ -370,7 +398,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
     private func previewPlan(using request: AtlasRequestEnvelope, findingIDs: [UUID]) async -> AtlasWorkerCommandResult {
         let plan = registeredPreview(makePreviewPlan(findingIDs: findingIDs), kind: .smartClean)
         state.currentPlan = plan
-        await persistState(context: "preview plan refresh")
+        await persistState(context: "preview plan refresh", requestID: request.id)
         let response = AtlasResponseEnvelope(requestID: request.id, response: .preview(plan))
         await auditStore.append("Prepared preview plan \(plan.id.uuidString) for request \(request.id.uuidString)")
         return AtlasWorkerCommandResult(
@@ -392,7 +420,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
                 let apps = try await appsInventoryProvider.collectInstalledApps()
                 guard apps.count <= AtlasExecutionLimits.maximumScanEntries else { throw AtlasPlanRegistryError.tooManyEntries }
                 state.snapshot.apps = apps
-                await persistState(context: "refresh app inventory")
+                await persistState(context: "refresh app inventory", requestID: request.id)
             } catch { return rejectedResult(for: request, code: .executionUnavailable, reason: error.localizedDescription) }
         } else {
             #if !DEBUG
@@ -441,7 +469,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
 
     private func settingsSet(using request: AtlasRequestEnvelope, settings: AtlasSettings) async -> AtlasWorkerCommandResult {
         state.settings = sanitized(settings: settings)
-        await persistState(context: "update settings")
+        await persistState(context: "update settings", requestID: request.id)
         let response = AtlasResponseEnvelope(requestID: request.id, response: .settings(state.settings))
         await auditStore.append("Updated settings for request \(request.id.uuidString)")
         return AtlasWorkerCommandResult(request: request, response: response, events: [], snapshot: state.snapshot)
@@ -486,7 +514,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
             total = sum.partialValue
         }
         state.snapshot.fileOrganizerEntries = entries
-        await persistState(context: "file organizer scan")
+        await persistState(context: "file organizer scan", requestID: request.id)
 
         let response = AtlasResponseEnvelope(
             requestID: request.id,
@@ -510,7 +538,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         )
         state.snapshot.taskRuns.removeAll { $0.id == taskID }
         state.snapshot.taskRuns.insert(completedRun, at: 0)
-        await persistState(context: "file organizer scan complete")
+        await persistState(context: "file organizer scan complete", requestID: request.id)
 
         let events = progressEvents + [AtlasEventEnvelope(event: .taskFinished(completedRun))]
         await auditStore.append("Completed File Organizer scan \(taskID.uuidString)")
@@ -543,7 +571,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
                 state.snapshot.fileOrganizerEntries[idx] = entry
             }
         }
-        await persistState(context: "file organizer classify")
+        await persistState(context: "file organizer classify", requestID: request.id)
 
         let response = AtlasResponseEnvelope(
             requestID: request.id,
@@ -694,9 +722,14 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         // Retention never removes operation evidence or its physical source.
     }
 
-    private func persistState(context: String) async {
+    private func persistState(context: String, lease: AtlasMutationLease? = nil, requestID: UUID) async {
         guard persistenceFailure == nil else { return }
-        do { _ = try repository.saveState(state) }
+        do { persistedState = try repository.saveState(state, expectedState: persistedState, lease: lease) }
+        catch AtlasJournalError.busy {
+            didReconcile = false
+            transientSaveFailures[requestID] = "Workspace is busy; no snapshot save was applied."
+            await auditStore.append("\(context): workspace busy; save was not applied")
+        }
         catch {
             persistenceFailure = "State save failed; writes are disabled: " + error.localizedDescription
             await auditStore.append("\(context): \(persistenceFailure!)")

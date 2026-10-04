@@ -25,8 +25,8 @@ final class SmartCleanActionBarModelTests: XCTestCase {
             canExecutePlan: true, selectedCount: 3, selectedBytes: 2_048, recoverableCount: 3
         ))
         XCTAssertEqual(review.intent, .execute)
-        XCTAssertTrue(review.isEnabled)
-        XCTAssertEqual(review.promise, AtlasL10n.string("smartclean.promise.full", 7))
+        XCTAssertFalse(review.isEnabled)
+        XCTAssertEqual(review.promise, AtlasL10n.string("security.mutation.unavailable"))
         XCTAssertNotNil(review.metricText)
 
         // ② live with empty selection → disabled primary, no ⛨ sentence.
@@ -34,7 +34,7 @@ final class SmartCleanActionBarModelTests: XCTestCase {
             effectiveStage: SmartCleanStage.review, canExecutePlan: true, selectedCount: 0
         ))
         XCTAssertFalse(noneSelected.isEnabled)
-        XCTAssertNil(noneSelected.promise, "no selection ⇒ no ⛨ sentence")
+        XCTAssertEqual(noneSelected.promise, AtlasL10n.string("security.mutation.unavailable"))
 
         // Read-only look-back → single return action.
         let readOnly = SmartCleanActionBarModel.resolve(Self.inputs(effectiveStage: 0, isReadOnly: true))

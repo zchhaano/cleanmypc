@@ -90,7 +90,7 @@ public struct LedgerDetailView: View {
             // renders only when the item has a physical restore path (real
             // file-backed recovery) — never for state-only records, never with
             // invented bytes/days.
-            if item.hasPhysicalRestorePath {
+            if item.isRestorable && item.hasPhysicalRestorePath {
                 AtlasStampBadge(title: AtlasL10n.string("ledger.stamp.title"), subtitle: AtlasL10n.string("ledger.stamp.subtitle", AtlasFormatters.byteCount(item.bytes), retentionDays), numberText: "#", style: .watermark)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     .padding([.trailing, .bottom], AtlasSpacing.lg)
@@ -134,11 +134,13 @@ public struct LedgerDetailView: View {
     /// expiring-soon beats available. Keeps the badge from promising
     /// recoverability for an item whose restore button is already disabled.
     private func recoveryBadgeText(_ item: RecoveryItem) -> String {
+        guard item.isRestorable else { return item.availabilityText }
         if item.isExpired { return AtlasL10n.string("ledger.recovery.badge.expired") }
         return AtlasL10n.string(item.isExpiringSoon ? "ledger.recovery.badge.expiring" : "ledger.recovery.badge.available")
     }
 
     private func recoveryBadgeTone(_ item: RecoveryItem) -> AtlasTone {
+        guard item.isRestorable else { return .neutral }
         if item.isExpired { return .neutral }
         return item.isExpiringSoon ? .warning : .success
     }
@@ -158,7 +160,7 @@ public struct LedgerDetailView: View {
     /// Restore actions — same recovery point as the SmartClean undo toast.
     private func restoreActions(_ item: RecoveryItem) -> some View {
         VStack(alignment: .leading, spacing: AtlasSpacing.sm) {
-            Text(AtlasSafetyCapabilities.fileMutationsEnabled ? restoreHint(item) : AtlasL10n.string("security.mutation.unavailable"))
+            Text(item.availabilityText)
                 .font(AtlasTypography.caption)
                 .accessibilityIdentifier("ledger.restore.availability")
             ViewThatFits(in: .horizontal) {

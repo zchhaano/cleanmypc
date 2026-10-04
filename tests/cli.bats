@@ -245,7 +245,8 @@ EOF
 
 	run env PATH="$fake_bin:$PATH" MOLE_PAM_SUDO_FILE="$pam_file" "$PROJECT_ROOT/bin/touchid.sh" enable
 	[ "$status" -ne 0 ]
-	! grep -q "pam_tid.so" "$pam_file"
+	run grep -q "pam_tid.so" "$pam_file"
+	[ "$status" -eq 1 ]
 	[[ ! -f "${pam_file}.mole-backup" ]]
 }
 

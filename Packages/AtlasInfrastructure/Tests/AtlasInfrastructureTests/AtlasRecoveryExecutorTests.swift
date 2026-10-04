@@ -5,6 +5,51 @@ import AtlasFileSafety
 @testable import AtlasInfrastructure
 
 final class AtlasRecoveryExecutorTests: XCTestCase {
+    func testRequestStatusWithUnstartedSelectionRequiresReconciliation() throws {
+        let f = try Fixture(); defer { f.clean() }
+        let missing = UUID()
+        let restoreStatus = AtlasRequestStatus(requestID: UUID(), operations: [f.record], selectedOperationIDs: [f.record.operationID, missing])
+        XCTAssertEqual(restoreStatus.unstartedOperationIDs, [missing])
+        XCTAssertTrue(restoreStatus.requiresReconciliation)
+        let selection = AtlasExecutionSelection(planID: f.record.planID, planDigest: f.record.planDigest, selectedEntryIDs: [f.record.entryID, missing])
+        let executionStatus = AtlasRequestStatus(requestID: f.record.requestID, operations: [f.record], selection: selection)
+        XCTAssertEqual(executionStatus.unstartedEntryIDs, [missing])
+        XCTAssertTrue(executionStatus.requiresReconciliation)
+    }
+    func testRestoreRequestStatusSurvivesSuccessAndSelectionIsBound() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        let request = UUID()
+        let first = try await f.executor.restore(operationID: f.record.operationID, requestID: request)
+        XCTAssertEqual(first.status, .restored)
+        let service = try AtlasNativeMutationService(directoryURL: f.state, registry: AtlasActionPlanRegistry(), context: .init(homeDirectoryURL: f.home))
+        let status = try service.status(requestID: request)
+        XCTAssertEqual(status.operations.last?.restoreRequestID, request)
+        XCTAssertEqual(status.operations.last?.state, .restored)
+        XCTAssertEqual(status.selectedOperationIDs, [f.record.operationID])
+        let again = try await f.executor.restore(operationID: f.record.operationID, requestID: request)
+        XCTAssertEqual(again.status, .alreadyRestored)
+        do { _ = try await f.executor.restore(operationID: UUID(), requestID: request); XCTFail("Request content changed") }
+        catch { XCTAssertEqual(error as? AtlasJournalError, .invalidRequest) }
+    }
+    func testLostRestoreReplyNeverResumesUnstartedOperation() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        let request = UUID()
+        let missing = UUID()
+        let selection = [f.record.operationID, missing].sorted { $0.uuidString < $1.uuidString }
+        let storage = try AtlasSecureDirectory(f.state)
+        try storage.writeAtomic("restore-request-\(request.uuidString).json", data: JSONEncoder().encode(selection), replacing: false)
+        let result = try await f.executor.restoreBatch(operationIDs: selection, requestID: request)
+        XCTAssertTrue(result.allSatisfy { $0.status == .reconciliationRequired })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: f.destination.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: f.source.path))
+    }
+    func testUnsupportedRecoveryObjectIsUnknownNotMissing() async throws {
+        let f = try Fixture(); defer { f.clean() }
+        try FileManager.default.removeItem(at: f.destination)
+        try FileManager.default.createSymbolicLink(at: f.destination, withDestinationURL: f.source)
+        let result = try await f.executor.restore(operationID: f.record.operationID, requestID: UUID())
+        XCTAssertEqual(result.status, .reconciliationRequired)
+    }
     func testSameNameReplacementIsNeverCountedOrOverwritten() async throws {
         let f = try Fixture(); defer { f.clean() }
         try FileManager.default.removeItem(at: f.destination)

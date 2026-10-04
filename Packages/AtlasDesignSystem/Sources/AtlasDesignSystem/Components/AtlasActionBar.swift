@@ -183,6 +183,7 @@ public struct AtlasActionBar: View {
                     .foregroundStyle(AtlasColor.actionBarText)
                     .help(promise) // full sentence on hover
                     .accessibilityLabel(Text(promise))
+                    .accessibilityIdentifier((primaryIdentifier ?? "actionbar") + ".availability")
             }
 
         case .full:
@@ -200,6 +201,7 @@ public struct AtlasActionBar: View {
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(Text(promise))
+                    .accessibilityIdentifier((primaryIdentifier ?? "actionbar") + ".availability")
             }
         }
     }

@@ -58,14 +58,23 @@ public struct AtlasWorkspaceRepository: Sendable {
         }
     }
     @discardableResult
-    public func saveState(_ state: AtlasWorkspaceState) throws -> AtlasWorkspaceState {
+    public func saveState(_ state: AtlasWorkspaceState, expectedState: AtlasWorkspaceState? = nil, lease: AtlasMutationLease? = nil) throws -> AtlasWorkspaceState {
         let directory = try AtlasSecureDirectory(directoryURL)
         let coordinator = try AtlasMutationCoordinator(directoryURL: directoryURL)
-        return try coordinator.withSynchronousLease {
-            if let data = try directory.readFile(stateFileURL.lastPathComponent) { _ = try decode(data) }
+        let write: () throws -> AtlasWorkspaceState = {
+            if let data = try directory.readFile(stateFileURL.lastPathComponent) {
+                let current = try decode(data).state
+                if let expectedState, current != expectedState { throw AtlasWorkspaceRepositoryError.writeFailed("Saved state changed in another worker; reload before writing.") }
+            } else if expectedState != nil { throw AtlasWorkspaceRepositoryError.writeFailed("Saved state disappeared; reload before writing.") }
             try writeState(state, directory: directory)
             return state
         }
+        if let lease {
+            guard lease.validates(directory) else { throw AtlasJournalError.unsafeStorage }
+            return try write()
+        }
+        return try coordinator.withSynchronousLease(write)
+
     }
     public func loadScaffoldSnapshot() throws -> AtlasWorkspaceSnapshot { try loadState().snapshot }
     public func loadCurrentPlan() throws -> ActionPlan { try loadState().currentPlan }

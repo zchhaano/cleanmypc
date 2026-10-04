@@ -45,6 +45,19 @@ final class LedgerModelTests: XCTestCase {
 
     // MARK: - Entry mapping: recovery item → entry (pure function)
 
+    func testUnverifiedRecoveryNeverPromisesRecoveryInTimelineOrReport() {
+        for availability in [AtlasRecoveryAvailability.unverified, .sourceMissing, .targetConflict, .reconciliationRequired] {
+            let item = RecoveryItem(title: "Unsafe", detail: "d", originalPath: "/missing", bytes: 42,
+                deletedAt: Date(), expiresAt: nil, recoveryAvailability: availability)
+            XCTAssertEqual(LedgerEntryMapping.entry(for: item, retentionDays: 7).status, .archived)
+            let report = LedgerExportController.renderReport(taskRuns: [], recoveryItems: [item], retentionDays: 7, planNumber: { _ in nil })
+            XCTAssertTrue(report.contains(AtlasL10n.string(availability.explanationKey)))
+            XCTAssertFalse(report.contains(AtlasL10n.string("ledger.export.entry.status", AtlasL10n.string("ledger.export.entry.status.recoverable"))))
+            XCTAssertFalse(LedgerFilter.recoverable.matches(recovery: item))
+            XCTAssertTrue(LedgerFilter.archive.matches(recovery: item))
+        }
+    }
+
     func testEntryMappingRecoveryItemRecoverable() {
         let item = RecoveryItem(
             title: "Chrome Cache",
@@ -60,13 +73,7 @@ final class LedgerModelTests: XCTestCase {
         XCTAssertEqual(entry.title, item.title)
         XCTAssertEqual(entry.detail, item.detail)
 
-        if case .recoverable(let days) = entry.status {
-            // 6 * 86400s truncates to 5 or 6 whole days depending on wall-clock
-            // second at run time; assert the band rather than an exact value.
-            XCTAssertTrue((5...6).contains(days), "days-left should be ~6, got \(days)")
-        } else {
-            XCTFail("expected .recoverable status, got \(entry.status)")
-        }
+        XCTAssertEqual(entry.status, .archived, "Unverified records cannot promise recovery")
     }
 
     func testEntryMappingRecoveryItemExpiredArchived() {
@@ -94,7 +101,7 @@ final class LedgerModelTests: XCTestCase {
             expiresAt: nil
         )
         let entry = LedgerEntryMapping.entry(for: item, retentionDays: 7)
-        XCTAssertEqual(entry.status, .verified, "no expiry ⇒ permanently recoverable record")
+        XCTAssertEqual(entry.status, .archived, "No expiry does not prove recovery")
     }
 
     // MARK: - Selection resolution (non-clobbering invariant — round-9/15)
@@ -315,12 +322,12 @@ final class LedgerModelTests: XCTestCase {
             planNumber: { _ in nil })
 
         // Header summary still counts both.
-        XCTAssertTrue(markdown.contains("可恢复项 2 个"), "header counts both recovery items")
+        XCTAssertTrue(markdown.contains("可恢复项 0 个"), "Unverified records must not count as recoverable")
         // Each recovery item is now listed in the entries section with its path
         // (summary) and a recoverable-bytes line — previously neither appeared.
         XCTAssertTrue(markdown.contains("/Users/x/old.zip"), "live recovery item path listed")
         XCTAssertTrue(markdown.contains("/Users/x/stale.tar"), "expired recovery item path listed")
-        XCTAssertTrue(markdown.contains("可恢复："), "recoverable byte line present for a recovery entry")
+        XCTAssertFalse(markdown.contains("可恢复："), "Unverified records must not promise recoverable bytes")
         // Status reflects expiry state (guards the expired-awareness theme shared
         // with the on-screen recovery metric).
         XCTAssertTrue(markdown.contains("已过期"), "expired item marked expired")
@@ -336,14 +343,14 @@ final class LedgerModelTests: XCTestCase {
     func testFilterRecoverableExcludesExpired() {
         let live = RecoveryItem(title: "live", detail: "d", originalPath: "/p", bytes: 1, deletedAt: Date(), expiresAt: Date().addingTimeInterval(86400))
         let expired = RecoveryItem(title: "exp", detail: "d", originalPath: "/p", bytes: 1, deletedAt: Date(), expiresAt: Date().addingTimeInterval(-86400))
-        XCTAssertTrue(LedgerFilter.recoverable.matches(recovery: live))
+        XCTAssertFalse(LedgerFilter.recoverable.matches(recovery: live))
         XCTAssertFalse(LedgerFilter.recoverable.matches(recovery: expired))
     }
 
     func testFilterArchiveMatchesOnlyExpired() {
         let live = RecoveryItem(title: "live", detail: "d", originalPath: "/p", bytes: 1, deletedAt: Date(), expiresAt: Date().addingTimeInterval(86400))
         let expired = RecoveryItem(title: "exp", detail: "d", originalPath: "/p", bytes: 1, deletedAt: Date(), expiresAt: Date().addingTimeInterval(-86400))
-        XCTAssertFalse(LedgerFilter.archive.matches(recovery: live))
+        XCTAssertTrue(LedgerFilter.archive.matches(recovery: live))
         XCTAssertTrue(LedgerFilter.archive.matches(recovery: expired))
     }
 

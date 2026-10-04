@@ -44,6 +44,11 @@ check_tcc_permissions() {
 # Args: $1=browser_name, $2=cache_path
 # Clean Service Worker cache while protecting critical web editors.
 clean_service_worker_cache() {
+    if [[ "${DRY_RUN:-false}" != "true" ]]; then
+        printf "%s\n" "Skipped: file cleanup is disabled by the Atlas safety policy."
+        return 0
+    fi
+
     local browser_name="$1"
     local cache_path="$2"
     [[ ! -d "$cache_path" ]] && return 0

@@ -115,13 +115,13 @@ public struct SmartCleanActionBarModel: Equatable {
         case SmartCleanStage.review where !inputs.isReviewZero:
             return SmartCleanActionBarModel(
                 title: AtlasL10n.string("smartclean.stage.actionbar.execute", inputs.selectedCount),
-                isEnabled: inputs.canExecutePlan && inputs.selectedCount > 0,
+                isEnabled: AtlasSafetyCapabilities.fileMutationsEnabled && inputs.canExecutePlan && inputs.selectedCount > 0,
                 // ⛨ promise 三式 (§1.6): full / partial / absent, never static.
-                promise: SmartCleanEvidenceBuilder.promise(
+                promise: AtlasSafetyCapabilities.fileMutationsEnabled ? SmartCleanEvidenceBuilder.promise(
                     recoverableCount: inputs.recoverableCount,
                     totalCount: inputs.selectedCount,
                     retentionDays: inputs.retentionDays
-                ),
+                ) : AtlasL10n.string("security.mutation.unavailable"),
                 metricText: SmartCleanEvidenceBuilder.metricText(
                     selectedBytes: inputs.selectedBytes,
                     selectedCount: inputs.selectedCount

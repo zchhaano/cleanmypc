@@ -24,8 +24,9 @@ fix_broken_preferences() {
 
         plutil -lint "$plist_file" > /dev/null 2>&1 && continue
 
-        safe_remove "$plist_file" true > /dev/null 2>&1 || true
-        broken_count=$((broken_count + 1))
+        if safe_remove "$plist_file" true > /dev/null 2>&1; then
+            broken_count=$((broken_count + 1))
+        fi
     done < <(command find "$prefs_dir" -maxdepth 1 -name "*.plist" -type f 2> /dev/null || true)
 
     # Check ByHost preferences.
@@ -44,8 +45,9 @@ fix_broken_preferences() {
 
             plutil -lint "$plist_file" > /dev/null 2>&1 && continue
 
-            safe_remove "$plist_file" true > /dev/null 2>&1 || true
-            broken_count=$((broken_count + 1))
+            if safe_remove "$plist_file" true > /dev/null 2>&1; then
+                broken_count=$((broken_count + 1))
+            fi
         done < <(command find "$byhost_dir" -name "*.plist" -type f 2> /dev/null || true)
     fi
 

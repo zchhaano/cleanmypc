@@ -20,30 +20,10 @@ teardown_file() {
     fi
 }
 
-@test "clean_time_machine_failed_backups exits when tmutil has no destinations" {
-    run bash --noprofile --norc << 'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/system.sh"
-
-defaults() { echo "1"; }
-
-
-tmutil() {
-    if [[ "$1" == "destinationinfo" ]]; then
-        echo "No destinations configured"
-        return 0
-    fi
-    return 0
-}
-pgrep() { return 1; }
-find() { return 0; }
-
-clean_time_machine_failed_backups
-EOF
-
+@test "clean_time_machine_failed_backups exits when tmutil has no destinations (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/clean/system.sh"; clean_time_machine_failed_backups'
     [ "$status" -eq 0 ]
-    [[ "$output" == *"No incomplete backups found"* ]]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
 @test "clean_local_snapshots reports snapshot count" {
@@ -95,67 +75,16 @@ EOF
     [[ "$output" != *"Time Machine local snapshots"* ]]
 }
 
-@test "clean_homebrew skips when cleaned recently" {
-    run bash --noprofile --norc << 'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
-
-mkdir -p "$HOME/.cache/mole"
-date +%s > "$HOME/.cache/mole/brew_last_cleanup"
-
-brew() { return 0; }
-
-clean_homebrew
-EOF
-
+@test "clean_homebrew skips when cleaned recently (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/clean/brew.sh"; clean_homebrew'
     [ "$status" -eq 0 ]
-    [[ "$output" == *"cleaned"* ]]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
-@test "clean_homebrew runs cleanup with timeout stubs" {
-    run bash --noprofile --norc << 'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/clean/brew.sh"
-
-mkdir -p "$HOME/.cache/mole"
-rm -f "$HOME/.cache/mole/brew_last_cleanup"
-
-    start_inline_spinner(){ :; }
-    stop_inline_spinner(){ :; }
-    note_activity(){ :; }
-    run_with_timeout() {
-        local duration="$1"
-        shift
-        if [[ "$1" == "du" ]]; then
-            echo "51201 $3"
-            return 0
-        fi
-        "$@"
-    }
-
-    brew() {
-        case "$1" in
-            cleanup)
-            echo "Removing: package"
-            return 0
-            ;;
-        autoremove)
-            echo "Uninstalling pkg"
-            return 0
-            ;;
-        *)
-            return 0
-            ;;
-    esac
-}
-
-    clean_homebrew
-EOF
-
+@test "clean_homebrew runs cleanup with timeout stubs (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/clean/brew.sh"; clean_homebrew'
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Homebrew cleanup"* ]]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
 @test "check_appstore_updates is skipped for performance" {
@@ -469,92 +398,34 @@ EOF
     [ "$status" -eq 124 ]
 }
 
-@test "opt_saved_state_cleanup removes old saved states" {
-    local state_dir="$HOME/Library/Saved Application State"
-    mkdir -p "$state_dir/com.example.app.savedState"
-    touch "$state_dir/com.example.app.savedState/data.plist"
-
-    touch -t 202301010000 "$state_dir/com.example.app.savedState/data.plist"
-
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-opt_saved_state_cleanup
-EOF
-
-    [ "$status" -eq 0 ]
+@test "opt_saved_state_cleanup removes old saved states (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; opt_saved_state_cleanup'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
-@test "opt_saved_state_cleanup handles missing state directory" {
-    rm -rf "$HOME/Library/Saved Application State"
-
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-opt_saved_state_cleanup
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"App saved states optimized"* ]]
+@test "opt_saved_state_cleanup handles missing state directory (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; opt_saved_state_cleanup'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
-@test "opt_saved_state_cleanup continues on permission denied (silent exit)" {
-    local state_dir="$HOME/Library/Saved Application State"
-    mkdir -p "$state_dir/com.example.old.savedState"
-    touch -t 202301010000 "$state_dir/com.example.old.savedState" 2> /dev/null || true
-
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-safe_remove() { return 1; }
-opt_saved_state_cleanup
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"App saved states optimized"* ]]
+@test "opt_saved_state_cleanup continues on permission denied (silent exit) (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; opt_saved_state_cleanup'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
-@test "opt_cache_refresh continues on permission denied (silent exit)" {
-    local cache_dir="$HOME/Library/Caches/com.apple.QuickLook.thumbnailcache"
-    mkdir -p "$cache_dir"
-    touch "$cache_dir/test.db"
-
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-qlmanage() { return 0; }
-safe_remove() { return 1; }
-opt_cache_refresh
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"QuickLook thumbnails refreshed"* ]]
+@test "opt_cache_refresh continues on permission denied (silent exit) (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; opt_cache_refresh'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
-@test "opt_cache_refresh cleans Quick Look cache" {
-    mkdir -p "$HOME/Library/Caches/com.apple.QuickLook.thumbnailcache"
-    touch "$HOME/Library/Caches/com.apple.QuickLook.thumbnailcache/test.db"
-
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-qlmanage() { return 0; }
-cleanup_path() {
-    local path="$1"
-    local label="${2:-}"
-    [[ -e "$path" ]] && rm -rf "$path" 2>/dev/null || true
-}
-export -f qlmanage cleanup_path
-opt_cache_refresh
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"QuickLook thumbnails refreshed"* ]]
+@test "opt_cache_refresh cleans Quick Look cache (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; opt_cache_refresh'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
 @test "get_path_size_kb returns zero for missing directory" {
@@ -584,100 +455,26 @@ EOF
     [ "$output" -ge 10 ]
 }
 
-@test "opt_fix_broken_configs reports fixes" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/maintenance.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-
-fix_broken_preferences() {
-    echo 2
+@test "opt_fix_broken_configs reports fixes (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; opt_fix_broken_configs'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
-opt_fix_broken_configs
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Repaired 2 corrupted preference files"* ]]
+@test "opt_memory_pressure_relief skips when pressure is normal (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; opt_memory_pressure_relief'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
-@test "opt_memory_pressure_relief skips when pressure is normal" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-
-memory_pressure() {
-    echo "System-wide memory free percentage: 50%"
-    return 0
-}
-export -f memory_pressure
-
-opt_memory_pressure_relief
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Memory pressure already optimal"* ]]
+@test "opt_memory_pressure_relief executes purge when pressure is high (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; opt_memory_pressure_relief'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
-@test "opt_memory_pressure_relief executes purge when pressure is high" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-
-memory_pressure() {
-    echo "System-wide memory free percentage: warning"
-    return 0
-}
-export -f memory_pressure
-
-sudo() {
-    if [[ "$1" == "purge" ]]; then
-        echo "purge:executed"
-        return 0
-    fi
-    return 1
-}
-export -f sudo
-
-opt_memory_pressure_relief
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Inactive memory released"* ]]
-    [[ "$output" == *"System responsiveness improved"* ]]
-}
-
-@test "opt_spotlight_index_optimize skips when search is fast" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc << 'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-
-mdutil() {
-    if [[ "$1" == "-s" ]]; then
-        echo "Indexing enabled."
-        return 0
-    fi
-    return 0
-}
-export -f mdutil
-
-mdfind() {
-    return 0
-}
-export -f mdfind
-
-date() {
-    echo "1000"
-}
-export -f date
-
-opt_spotlight_index_optimize
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Spotlight index already optimal"* ]]
+@test "opt_spotlight_index_optimize skips when search is fast (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; opt_spotlight_index_optimize'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }

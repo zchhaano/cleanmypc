@@ -13,6 +13,19 @@ import Foundation
 // `isExpired(asOf:)` on a different type — no collision).
 
 extension RecoveryItem {
+    var isRestorable: Bool {
+        AtlasSafetyCapabilities.fileMutationsEnabled && recoveryAvailability == .ready && !isExpired
+    }
+
+    var availabilityText: String {
+        if recoveryAvailability == .restored { return AtlasL10n.string("security.recovery.restored") }
+        if isExpired { return AtlasL10n.string("ledger.recovery.badge.expired") }
+        if recoveryAvailability != .ready {
+            return AtlasL10n.string(recoveryAvailability?.explanationKey ?? "security.recovery.unverified")
+        }
+        return AtlasL10n.string(AtlasSafetyCapabilities.fileMutationsEnabled ? "security.recovery.ready" : "security.mutation.unavailable")
+    }
+
     /// True when the retention window has closed (or, for no-expiry items,
     /// never — they are permanently recoverable records). Fail-closed: a
     /// missing expiry is treated as *not* expired.

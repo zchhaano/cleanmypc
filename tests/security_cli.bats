@@ -74,3 +74,24 @@ teardown() { rm -rf "$SECURITY_TMP"; }
     run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; stop_inline_spinner() { :; }; f=$(create_temp_file); test -f "$f"; cleanup_temp_files; test ! -e "$f"'
     [ "$status" -eq 0 ]
 }
+
+@test "security: refused cleanup never reports cleaned files or bytes" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/clean/user.sh"; source "$PROJECT_ROOT/lib/clean/caches.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; DRY_RUN=false; MOLE_DRY_RUN=0; files_cleaned=0; total_size_cleaned=0; total_items=0; clean_chrome_old_versions; clean_edge_old_versions; clean_edge_updater_old_versions; process_container_cache "$SECURITY_TMP"; clean_application_support_logs; clean_service_worker_cache Browser "$SECURITY_TMP"; opt_cache_refresh || :; opt_saved_state_cleanup || :; test "$files_cleaned" -eq 0; test "$total_size_cleaned" -eq 0; test "$total_items" -eq 0; test "$OPTIMIZE_CACHE_CLEANED_KB" -eq 0'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *Skipped* ]]
+    [[ "$output" != *refreshed* ]]
+    [[ "$output" != *rebuilt* ]]
+}
+
+@test "security: tool-specific deletion bypasses never execute" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/clean/dev.sh"; source "$PROJECT_ROOT/lib/clean/brew.sh"; source "$PROJECT_ROOT/lib/clean/system.sh"; brew() { echo brew >> "$CALL_LOG"; }; tmutil() { echo tmutil >> "$CALL_LOG"; }; docker() { echo docker >> "$CALL_LOG"; }; xcrun() { echo xcrun >> "$CALL_LOG"; }; DRY_RUN=false; clean_tool_cache Docker docker system prune -af --volumes; clean_homebrew; clean_time_machine_failed_backups; clean_dev_mobile'
+    [ "$status" -eq 0 ]
+    [ ! -s "$CALL_LOG" ]
+    [[ "$output" == *Skipped* ]]
+}
+
+@test "security: maintenance functions cannot mutate system or app databases" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; sudo() { echo sudo >> "$CALL_LOG"; }; sqlite3() { echo sqlite3 >> "$CALL_LOG"; }; killall() { echo killall >> "$CALL_LOG"; }; touch() { echo touch >> "$CALL_LOG"; }; MOLE_DRY_RUN=0; for f in flush_dns_cache opt_system_maintenance opt_sqlite_vacuum opt_launch_services_rebuild opt_font_cache_rebuild opt_memory_pressure_relief opt_spotlight_index_optimize opt_dock_refresh opt_fix_broken_configs; do if "$f"; then exit 9; fi; done'
+    [ "$status" -eq 0 ]
+    [ ! -s "$CALL_LOG" ]
+}

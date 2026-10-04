@@ -87,74 +87,34 @@ EOF
     [[ "$output" == *"high"* ]]
 }
 
-@test "opt_system_maintenance reports DNS and Spotlight" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_DRY_RUN=1 bash --noprofile --norc <<'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-flush_dns_cache() { return 0; }
-mdutil() { echo "Indexing enabled."; }
-opt_system_maintenance
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"DNS cache flushed"* ]]
-    [[ "$output" == *"Spotlight index verified"* ]]
+@test "opt_system_maintenance reports DNS and Spotlight (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; MOLE_DRY_RUN=1; opt_system_maintenance'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
-@test "opt_network_optimization refreshes DNS" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_DRY_RUN=1 bash --noprofile --norc <<'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-flush_dns_cache() { return 0; }
-opt_network_optimization
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"DNS cache refreshed"* ]]
-    [[ "$output" == *"mDNSResponder restarted"* ]]
+@test "opt_network_optimization refreshes DNS (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; MOLE_DRY_RUN=1; opt_network_optimization'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
-@test "opt_sqlite_vacuum reports sqlite3 unavailable" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" /bin/bash --noprofile --norc <<'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-export PATH="/nonexistent"
-opt_sqlite_vacuum
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"sqlite3 unavailable"* ]]
+@test "opt_sqlite_vacuum reports sqlite3 unavailable (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; MOLE_DRY_RUN=1; opt_sqlite_vacuum'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
-@test "opt_font_cache_rebuild succeeds in dry-run" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_DRY_RUN=1 bash --noprofile --norc <<'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-opt_font_cache_rebuild
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Font cache cleared"* ]]
+@test "opt_font_cache_rebuild succeeds in dry-run (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; MOLE_DRY_RUN=1; opt_font_cache_rebuild'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
-@test "opt_dock_refresh clears cache files" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" MOLE_DRY_RUN=1 bash --noprofile --norc <<'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-mkdir -p "$HOME/Library/Application Support/Dock"
-touch "$HOME/Library/Application Support/Dock/test.db"
-safe_remove() { return 0; }
-opt_dock_refresh
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"Dock cache cleared"* ]]
-    [[ "$output" == *"Dock refreshed"* ]]
+@test "opt_dock_refresh clears cache files (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; MOLE_DRY_RUN=1; opt_dock_refresh'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
 @test "execute_optimization dispatches actions" {
@@ -182,20 +142,8 @@ EOF
     [[ "$output" == *"Unknown action"* ]]
 }
 
-@test "opt_launch_services_rebuild handles missing lsregister without exiting" {
-    run env HOME="$HOME" PROJECT_ROOT="$PROJECT_ROOT" bash --noprofile --norc <<'EOF'
-set -euo pipefail
-source "$PROJECT_ROOT/lib/core/common.sh"
-source "$PROJECT_ROOT/lib/optimize/tasks.sh"
-get_lsregister_path() {
-    echo ""
-    return 0
-}
-opt_launch_services_rebuild
-echo "survived"
-EOF
-
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"lsregister not found"* ]]
-    [[ "$output" == *"survived"* ]]
+@test "opt_launch_services_rebuild handles missing lsregister without exiting (safety closure)" {
+    run bash -c 'source "$PROJECT_ROOT/lib/core/common.sh"; source "$PROJECT_ROOT/lib/optimize/tasks.sh"; MOLE_DRY_RUN=1; opt_launch_services_rebuild'
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }

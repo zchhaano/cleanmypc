@@ -78,459 +78,56 @@ is_memory_pressure_high() {
 }
 
 flush_dns_cache() {
-    if [[ "${MOLE_DRY_RUN:-0}" == "1" ]]; then
-        MOLE_DNS_FLUSHED=1
-        return 0
-    fi
-
-    if sudo dscacheutil -flushcache 2> /dev/null && sudo killall -HUP mDNSResponder 2> /dev/null; then
-        MOLE_DNS_FLUSHED=1
-        return 0
-    fi
+    printf '%s\n' "Not executed: system and application maintenance is disabled by the Atlas safety policy." >&2
     return 1
 }
 
-# Basic system maintenance.
 opt_system_maintenance() {
-    if flush_dns_cache; then
-        opt_msg "DNS cache flushed"
-    fi
-
-    local spotlight_status
-    spotlight_status=$(mdutil -s / 2> /dev/null || echo "")
-    if echo "$spotlight_status" | grep -qi "Indexing disabled"; then
-        echo -e "  ${GRAY}${ICON_EMPTY}${NC} Spotlight indexing disabled"
-    else
-        opt_msg "Spotlight index verified"
-    fi
+    printf '%s\n' "Not executed: system and application maintenance is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
-# Refresh Finder caches (QuickLook/icon services).
 opt_cache_refresh() {
-    local total_cache_size=0
-
-    if [[ "${MO_DEBUG:-}" == "1" ]]; then
-        debug_operation_start "Finder Cache Refresh" "Refresh QuickLook thumbnails and icon services"
-        debug_operation_detail "Method" "Remove cache files and rebuild via qlmanage"
-        debug_operation_detail "Expected outcome" "Faster Finder preview generation, fixed icon display issues"
-        debug_risk_level "LOW" "Caches are automatically rebuilt"
-
-        local -a cache_targets=(
-            "$HOME/Library/Caches/com.apple.QuickLook.thumbnailcache"
-            "$HOME/Library/Caches/com.apple.iconservices.store"
-            "$HOME/Library/Caches/com.apple.iconservices"
-        )
-
-        debug_operation_detail "Files to be removed" ""
-        for target_path in "${cache_targets[@]}"; do
-            if [[ -e "$target_path" ]]; then
-                local size_kb
-                size_kb=$(get_path_size_kb "$target_path" 2> /dev/null || echo "0")
-                local size_human="unknown"
-                if [[ "$size_kb" -gt 0 ]]; then
-                    size_human=$(bytes_to_human "$((size_kb * 1024))")
-                fi
-                debug_file_action "  Will remove" "$target_path" "$size_human" ""
-            fi
-        done
-    fi
-
-    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
-        qlmanage -r cache > /dev/null 2>&1 || true
-        qlmanage -r > /dev/null 2>&1 || true
-    fi
-
-    local -a cache_targets=(
-        "$HOME/Library/Caches/com.apple.QuickLook.thumbnailcache"
-        "$HOME/Library/Caches/com.apple.iconservices.store"
-        "$HOME/Library/Caches/com.apple.iconservices"
-    )
-
-    for target_path in "${cache_targets[@]}"; do
-        if [[ -e "$target_path" ]]; then
-            if ! should_protect_path "$target_path"; then
-                local size_kb
-                size_kb=$(get_path_size_kb "$target_path" 2> /dev/null || echo "0")
-                if [[ "$size_kb" =~ ^[0-9]+$ ]]; then
-                    total_cache_size=$((total_cache_size + size_kb))
-                fi
-                safe_remove "$target_path" true > /dev/null 2>&1 || true
-            fi
-        fi
-    done
-
-    export OPTIMIZE_CACHE_CLEANED_KB="${total_cache_size}"
-    opt_msg "QuickLook thumbnails refreshed"
-    opt_msg "Icon services cache rebuilt"
+    printf '%s\n' "Not executed: system and application maintenance is disabled by the Atlas safety policy." >&2
+    export OPTIMIZE_CACHE_CLEANED_KB=0
+    return 1
 }
 
-# Removed: opt_maintenance_scripts - macOS handles log rotation automatically via launchd
-
-# Removed: opt_radio_refresh - Interrupts active user connections (WiFi, Bluetooth), degrading UX
-
-# Old saved states cleanup.
 opt_saved_state_cleanup() {
-    if [[ "${MO_DEBUG:-}" == "1" ]]; then
-        debug_operation_start "App Saved State Cleanup" "Remove old application saved states"
-        debug_operation_detail "Method" "Find and remove .savedState folders older than $MOLE_SAVED_STATE_AGE_DAYS days"
-        debug_operation_detail "Location" "$HOME/Library/Saved Application State"
-        debug_operation_detail "Expected outcome" "Reduced disk usage, apps start with clean state"
-        debug_risk_level "LOW" "Old saved states, apps will create new ones"
-    fi
-
-    local state_dir="$HOME/Library/Saved Application State"
-
-    if [[ -d "$state_dir" ]]; then
-        while IFS= read -r -d '' state_path; do
-            if should_protect_path "$state_path"; then
-                continue
-            fi
-            safe_remove "$state_path" true > /dev/null 2>&1 || true
-        done < <(command find "$state_dir" -type d -name "*.savedState" -mtime "+$MOLE_SAVED_STATE_AGE_DAYS" -print0 2> /dev/null)
-    fi
-
-    opt_msg "App saved states optimized"
+    printf '%s\n' "Not executed: system and application maintenance is disabled by the Atlas safety policy." >&2
+    return 1
 }
-
-# Removed: opt_swap_cleanup - Direct virtual memory operations pose system crash risk
-
-# Removed: opt_startup_cache - Modern macOS has no such mechanism
-
-# Removed: opt_local_snapshots - Deletes user Time Machine recovery points, breaks backup continuity
 
 opt_fix_broken_configs() {
-    local spinner_started="false"
-    if [[ -t 1 ]]; then
-        MOLE_SPINNER_PREFIX="  " start_inline_spinner "Checking preferences..."
-        spinner_started="true"
-    fi
-
-    local broken_prefs=$(fix_broken_preferences)
-
-    if [[ "$spinner_started" == "true" ]]; then
-        stop_inline_spinner
-    fi
-
-    export OPTIMIZE_CONFIGS_REPAIRED="${broken_prefs}"
-    if [[ $broken_prefs -gt 0 ]]; then
-        opt_msg "Repaired $broken_prefs corrupted preference files"
-    else
-        opt_msg "All preference files valid"
-    fi
+    printf '%s\n' "Not executed: system and application maintenance is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
-# DNS cache refresh.
 opt_network_optimization() {
-    if [[ "${MO_DEBUG:-}" == "1" ]]; then
-        debug_operation_start "Network Optimization" "Refresh DNS cache and restart mDNSResponder"
-        debug_operation_detail "Method" "Flush DNS cache via dscacheutil and killall mDNSResponder"
-        debug_operation_detail "Expected outcome" "Faster DNS resolution, fixed network connectivity issues"
-        debug_risk_level "LOW" "DNS cache is automatically rebuilt"
-    fi
-
-    if [[ "${MOLE_DNS_FLUSHED:-0}" == "1" ]]; then
-        opt_msg "DNS cache already refreshed"
-        opt_msg "mDNSResponder already restarted"
-        return 0
-    fi
-
-    if flush_dns_cache; then
-        opt_msg "DNS cache refreshed"
-        opt_msg "mDNSResponder restarted"
-    else
-        echo -e "  ${YELLOW}${ICON_WARNING}${NC} Failed to refresh DNS cache"
-    fi
+    printf '%s\n' "Not executed: system and application maintenance is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
-# SQLite vacuum for Mail/Messages/Safari (safety checks applied).
 opt_sqlite_vacuum() {
-    if [[ "${MO_DEBUG:-}" == "1" ]]; then
-        debug_operation_start "Database Optimization" "Vacuum SQLite databases for Mail, Safari, and Messages"
-        debug_operation_detail "Method" "Run VACUUM command on databases after integrity check"
-        debug_operation_detail "Safety checks" "Skip if apps are running, verify integrity first, 20s timeout"
-        debug_operation_detail "Expected outcome" "Reduced database size, faster app performance"
-        debug_risk_level "LOW" "Only optimizes databases, does not delete data"
-    fi
-
-    if ! command -v sqlite3 > /dev/null 2>&1; then
-        echo -e "  ${GRAY}-${NC} Database optimization already optimal, sqlite3 unavailable"
-        return 0
-    fi
-
-    local -a busy_apps=()
-    local -a check_apps=("Mail" "Safari" "Messages")
-    local app
-    for app in "${check_apps[@]}"; do
-        if pgrep -x "$app" > /dev/null 2>&1; then
-            busy_apps+=("$app")
-        fi
-    done
-
-    if [[ ${#busy_apps[@]} -gt 0 ]]; then
-        echo -e "  ${YELLOW}${ICON_WARNING}${NC} Close these apps before database optimization: ${busy_apps[*]}"
-        return 0
-    fi
-
-    local spinner_started="false"
-    if [[ "${MOLE_DRY_RUN:-0}" != "1" && -t 1 ]]; then
-        MOLE_SPINNER_PREFIX="  " start_inline_spinner "Optimizing databases..."
-        spinner_started="true"
-    fi
-
-    local -a db_paths=(
-        "$HOME/Library/Mail/V*/MailData/Envelope Index*"
-        "$HOME/Library/Messages/chat.db"
-        "$HOME/Library/Safari/History.db"
-        "$HOME/Library/Safari/TopSites.db"
-    )
-
-    local vacuumed=0
-    local timed_out=0
-    local failed=0
-    local skipped=0
-
-    for pattern in "${db_paths[@]}"; do
-        while IFS= read -r db_file; do
-            [[ ! -f "$db_file" ]] && continue
-            [[ "$db_file" == *"-wal" || "$db_file" == *"-shm" ]] && continue
-
-            should_protect_path "$db_file" && continue
-
-            if ! file "$db_file" 2> /dev/null | grep -q "SQLite"; then
-                continue
-            fi
-
-            # Skip large DBs (>100MB).
-            local file_size
-            file_size=$(get_file_size "$db_file")
-            if [[ "$file_size" -gt "$MOLE_SQLITE_MAX_SIZE" ]]; then
-                skipped=$((skipped + 1))
-                continue
-            fi
-
-            # Skip if freelist is tiny (already compact).
-            local page_info=""
-            page_info=$(run_with_timeout 5 sqlite3 "$db_file" "PRAGMA page_count; PRAGMA freelist_count;" 2> /dev/null || echo "")
-            local page_count=""
-            local freelist_count=""
-            page_count=$(echo "$page_info" | awk 'NR==1 {print $1}' 2> /dev/null || echo "")
-            freelist_count=$(echo "$page_info" | awk 'NR==2 {print $1}' 2> /dev/null || echo "")
-            if [[ "$page_count" =~ ^[0-9]+$ && "$freelist_count" =~ ^[0-9]+$ && "$page_count" -gt 0 ]]; then
-                if ((freelist_count * 100 < page_count * 5)); then
-                    skipped=$((skipped + 1))
-                    continue
-                fi
-            fi
-
-            # Verify integrity before VACUUM.
-            if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
-                local integrity_check=""
-                set +e
-                integrity_check=$(run_with_timeout 10 sqlite3 "$db_file" "PRAGMA integrity_check;" 2> /dev/null)
-                local integrity_status=$?
-                set -e
-
-                if [[ $integrity_status -ne 0 ]] || ! echo "$integrity_check" | grep -q "ok"; then
-                    skipped=$((skipped + 1))
-                    continue
-                fi
-            fi
-
-            local exit_code=0
-            if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
-                set +e
-                run_with_timeout 20 sqlite3 "$db_file" "VACUUM;" 2> /dev/null
-                exit_code=$?
-                set -e
-
-                if [[ $exit_code -eq 0 ]]; then
-                    vacuumed=$((vacuumed + 1))
-                elif [[ $exit_code -eq 124 ]]; then
-                    timed_out=$((timed_out + 1))
-                else
-                    failed=$((failed + 1))
-                fi
-            else
-                vacuumed=$((vacuumed + 1))
-            fi
-        done < <(compgen -G "$pattern" || true)
-    done
-
-    if [[ "$spinner_started" == "true" ]]; then
-        stop_inline_spinner
-    fi
-
-    export OPTIMIZE_DATABASES_COUNT="${vacuumed}"
-    if [[ $vacuumed -gt 0 ]]; then
-        opt_msg "Optimized $vacuumed databases for Mail, Safari, Messages"
-    elif [[ $timed_out -eq 0 && $failed -eq 0 ]]; then
-        opt_msg "All databases already optimized"
-    else
-        echo -e "  ${YELLOW}${ICON_WARNING}${NC} Database optimization incomplete"
-    fi
-
-    if [[ $skipped -gt 0 ]]; then
-        opt_msg "Already optimal for $skipped databases"
-    fi
-
-    if [[ $timed_out -gt 0 ]]; then
-        echo -e "  ${YELLOW}${ICON_WARNING}${NC} Timed out on $timed_out databases"
-    fi
-
-    if [[ $failed -gt 0 ]]; then
-        echo -e "  ${YELLOW}${ICON_WARNING}${NC} Failed on $failed databases"
-    fi
+    printf '%s\n' "Not executed: system and application maintenance is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
-# LaunchServices rebuild ("Open with" issues).
 opt_launch_services_rebuild() {
-    if [[ "${MO_DEBUG:-}" == "1" ]]; then
-        debug_operation_start "LaunchServices Rebuild" "Rebuild LaunchServices database"
-        debug_operation_detail "Method" "Run lsregister -gc then force rescan with -r -f on local, user, and system domains"
-        debug_operation_detail "Purpose" "Fix \"Open with\" menu issues, file associations, and stale app metadata"
-        debug_operation_detail "Expected outcome" "Correct app associations, fixed duplicate entries, fewer stale app listings"
-        debug_risk_level "LOW" "Database is automatically rebuilt"
-    fi
-
-    if [[ -t 1 ]]; then
-        MOLE_SPINNER_PREFIX="  " start_inline_spinner "Repairing LaunchServices..."
-    fi
-
-    local lsregister
-    lsregister=$(get_lsregister_path)
-
-    if [[ -n "$lsregister" ]]; then
-        local success=0
-
-        if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
-            set +e
-            "$lsregister" -gc > /dev/null 2>&1 || true
-            "$lsregister" -r -f -domain local -domain user -domain system > /dev/null 2>&1
-            success=$?
-            if [[ $success -ne 0 ]]; then
-                "$lsregister" -r -f -domain local -domain user > /dev/null 2>&1
-                success=$?
-            fi
-            set -e
-        else
-            success=0
-        fi
-
-        if [[ -t 1 ]]; then
-            stop_inline_spinner
-        fi
-
-        if [[ $success -eq 0 ]]; then
-            opt_msg "LaunchServices repaired"
-            opt_msg "File associations refreshed"
-        else
-            echo -e "  ${YELLOW}${ICON_WARNING}${NC} Failed to rebuild LaunchServices"
-        fi
-    else
-        if [[ -t 1 ]]; then
-            stop_inline_spinner
-        fi
-        echo -e "  ${YELLOW}${ICON_WARNING}${NC} lsregister not found"
-    fi
+    printf '%s\n' "Not executed: system and application maintenance is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
-# Font cache rebuild.
 opt_font_cache_rebuild() {
-    if [[ "${MO_DEBUG:-}" == "1" ]]; then
-        debug_operation_start "Font Cache Rebuild" "Clear and rebuild font cache"
-        debug_operation_detail "Method" "Run atsutil databases -remove"
-        debug_operation_detail "Safety checks" "Skip when browsers are running to avoid cache rebuild conflicts"
-        debug_operation_detail "Expected outcome" "Fixed font display issues, removed corrupted font cache"
-        debug_risk_level "LOW" "System automatically rebuilds font database"
-    fi
-
-    local success=false
-
-    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
-        # Some browsers (notably Firefox) can keep stale GPU/text caches in /var/folders if
-        # system font databases are reset while browser/helper processes are still running.
-        local -a running_browsers=()
-        if pgrep -if "Firefox|org\\.mozilla\\.firefox|firefox-gpu-helper" > /dev/null 2>&1; then
-            running_browsers+=("Firefox")
-        fi
-
-        local browser_name
-        local -a browser_checks=(
-            "Safari"
-            "Google Chrome"
-            "Chromium"
-            "Brave Browser"
-            "Microsoft Edge"
-            "Arc"
-            "Opera"
-            "Vivaldi"
-            "Zen Browser"
-            "Helium"
-        )
-        for browser_name in "${browser_checks[@]}"; do
-            if pgrep -ix "$browser_name" > /dev/null 2>&1; then
-                running_browsers+=("$browser_name")
-            fi
-        done
-
-        if [[ ${#running_browsers[@]} -gt 0 ]]; then
-            local running_list
-            running_list=$(printf "%s, " "${running_browsers[@]}")
-            running_list="${running_list%, }"
-            echo -e "  ${YELLOW}${ICON_WARNING}${NC} Skipped font cache rebuild because browsers are running: ${running_list}"
-            echo -e "  ${GRAY}${ICON_REVIEW}${NC} ${GRAY}Quit browsers completely, then rerun optimize if font issues persist${NC}"
-            return 0
-        fi
-
-        if sudo atsutil databases -remove > /dev/null 2>&1; then
-            success=true
-        fi
-    else
-        success=true
-    fi
-
-    if [[ "$success" == "true" ]]; then
-        opt_msg "Font cache cleared"
-        opt_msg "System will rebuild font database automatically"
-    else
-        echo -e "  ${YELLOW}${ICON_WARNING}${NC} Failed to clear font cache"
-    fi
+    printf '%s\n' "Not executed: system and application maintenance is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
-# Removed high-risk optimizations:
-# - opt_startup_items_cleanup: Risk of deleting legitimate app helpers
-# - opt_dyld_cache_update: Low benefit, time-consuming, auto-managed by macOS
-# - opt_system_services_refresh: Risk of data loss when killing system services
-
-# Memory pressure relief.
 opt_memory_pressure_relief() {
-    if [[ "${MO_DEBUG:-}" == "1" ]]; then
-        debug_operation_start "Memory Pressure Relief" "Release inactive memory if pressure is high"
-        debug_operation_detail "Method" "Run purge command to clear inactive memory"
-        debug_operation_detail "Condition" "Only runs if memory pressure is warning/critical"
-        debug_operation_detail "Expected outcome" "More available memory, improved responsiveness"
-        debug_risk_level "LOW" "Safe system command, does not affect active processes"
-    fi
-
-    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
-        if ! is_memory_pressure_high; then
-            opt_msg "Memory pressure already optimal"
-            return 0
-        fi
-
-        if sudo purge > /dev/null 2>&1; then
-            opt_msg "Inactive memory released"
-            opt_msg "System responsiveness improved"
-        else
-            echo -e "  ${YELLOW}${ICON_WARNING}${NC} Failed to release memory pressure"
-        fi
-    else
-        opt_msg "Inactive memory released"
-        opt_msg "System responsiveness improved"
-    fi
+    printf '%s\n' "Not executed: system and application maintenance is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
-# Network stack reset (route + ARP).
 opt_network_stack_optimize() {
     printf '%s\n' "Not executed: this operation is disabled by the Atlas safety policy." >&2
     return 1
@@ -550,82 +147,15 @@ opt_bluetooth_reset() {
 
 # Spotlight index check/rebuild (only if slow).
 opt_spotlight_index_optimize() {
-    local spotlight_status
-    spotlight_status=$(mdutil -s / 2> /dev/null || echo "")
-
-    if echo "$spotlight_status" | grep -qi "Indexing disabled"; then
-        echo -e "  ${GRAY}${ICON_EMPTY}${NC} Spotlight indexing is disabled"
-        return 0
-    fi
-
-    if echo "$spotlight_status" | grep -qi "Indexing enabled" && ! echo "$spotlight_status" | grep -qi "Indexing and searching disabled"; then
-        local slow_count=0
-        local test_start test_end test_duration
-        for _ in 1 2; do
-            test_start=$(get_epoch_seconds)
-            mdfind "kMDItemFSName == 'Applications'" > /dev/null 2>&1 || true
-            test_end=$(get_epoch_seconds)
-            test_duration=$((test_end - test_start))
-            if [[ $test_duration -gt 3 ]]; then
-                slow_count=$((slow_count + 1))
-            fi
-            sleep 1
-        done
-
-        if [[ $slow_count -ge 2 ]]; then
-            if ! is_ac_power; then
-                opt_msg "Spotlight index already optimal"
-                return 0
-            fi
-
-            if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
-                echo -e "  ${BLUE}${ICON_INFO}${NC} Spotlight search is slow, rebuilding index, may take 1-2 hours"
-                if sudo mdutil -E / > /dev/null 2>&1; then
-                    opt_msg "Spotlight index rebuild started"
-                    echo -e "  ${GRAY}Indexing will continue in background${NC}"
-                else
-                    echo -e "  ${YELLOW}${ICON_WARNING}${NC} Failed to rebuild Spotlight index"
-                fi
-            else
-                opt_msg "Spotlight index rebuild started"
-            fi
-        else
-            opt_msg "Spotlight index already optimal"
-        fi
-    else
-        opt_msg "Spotlight index verified"
-    fi
+    printf '%s\n' "Not executed: system and application maintenance is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
-# Dock cache refresh.
 opt_dock_refresh() {
-    local dock_support="$HOME/Library/Application Support/Dock"
-    local refreshed=false
-
-    if [[ -d "$dock_support" ]]; then
-        while IFS= read -r db_file; do
-            if [[ -f "$db_file" ]]; then
-                safe_remove "$db_file" true > /dev/null 2>&1 && refreshed=true
-            fi
-        done < <(command find "$dock_support" -name "*.db" -type f 2> /dev/null || true)
-    fi
-
-    local dock_plist="$HOME/Library/Preferences/com.apple.dock.plist"
-    if [[ -f "$dock_plist" ]]; then
-        touch "$dock_plist" 2> /dev/null || true
-    fi
-
-    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
-        killall Dock 2> /dev/null || true
-    fi
-
-    if [[ "$refreshed" == "true" ]]; then
-        opt_msg "Dock cache cleared"
-    fi
-    opt_msg "Dock refreshed"
+    printf '%s\n' "Not executed: system and application maintenance is disabled by the Atlas safety policy." >&2
+    return 1
 }
 
-# Dispatch optimization by action name.
 execute_optimization() {
     local action="$1"
     local path="${2:-}"

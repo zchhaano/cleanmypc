@@ -1,7 +1,29 @@
 import XCTest
+import Darwin
 import AtlasApplication
 @testable import AtlasInfrastructure
 final class AtlasWorkspaceCorruptionTests: XCTestCase {
+    func testFIFOStateAndJournalAreRejectedWithoutWaitingForWriter() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storage = try AtlasSecureDirectory(root)
+        for name in ["state.json", "operations.journal"] {
+            XCTAssertEqual(mkfifo(root.appendingPathComponent(name).path, 0o600), 0)
+            let started = Date()
+            XCTAssertThrowsError(try storage.readFile(name))
+            XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+        }
+    }
+    func testStaleSnapshotCannotOverwriteAnotherWorkersSave() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = AtlasWorkspaceRepository(stateFileURL: root.appendingPathComponent("state.json"))
+        let initial = try repo.loadState()
+        var newer = initial; newer.settings.recoveryRetentionDays = initial.settings.recoveryRetentionDays + 1
+        try repo.saveState(newer, expectedState: initial)
+        XCTAssertThrowsError(try repo.saveState(initial, expectedState: initial))
+        XCTAssertEqual(try repo.loadState(), newer)
+    }
     func testCorruptOrFutureStateIsPreservedAndNeverSeeded() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

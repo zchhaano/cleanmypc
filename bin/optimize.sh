@@ -114,7 +114,9 @@ show_optimization_summary() {
             key_stat="${config_count} configs repaired"
         fi
 
-        if [[ -n "$key_stat" ]]; then
+        if [[ "${total_applied:-0}" -eq 0 ]]; then
+            summary_details+=("No system changes applied; diagnostics only")
+        elif [[ -n "$key_stat" ]]; then
             summary_details+=("Applied ${GREEN}${total_applied:-0}${NC} optimizations, ${key_stat}")
         else
             summary_details+=("Applied ${GREEN}${total_applied:-0}${NC} optimizations, all services tuned")
@@ -130,7 +132,6 @@ show_optimization_summary() {
             fi
             summary_details+=("$summary_line3")
         fi
-        summary_details+=("System fully optimized")
     fi
 
     print_summary_block "$summary_title" "${summary_details[@]}"
@@ -484,29 +485,9 @@ main() {
     done < "$opts_file"
 
     echo ""
-    if [[ "${MOLE_DRY_RUN:-0}" != "1" ]]; then
-        ensure_sudo_session "System optimization requires admin access" || true
-    fi
-
-    export FIRST_ACTION=true
-    if [[ ${#safe_items[@]} -gt 0 ]]; then
-        for item in "${safe_items[@]}"; do
-            IFS='|' read -r name desc action path <<< "$item"
-            announce_action "$name" "$desc" "safe"
-            execute_optimization "$action" "$path"
-        done
-    fi
-
-    if [[ ${#confirm_items[@]} -gt 0 ]]; then
-        for item in "${confirm_items[@]}"; do
-            IFS='|' read -r name desc action path <<< "$item"
-            announce_action "$name" "$desc" "confirm"
-            execute_optimization "$action" "$path"
-        done
-    fi
-
-    local safe_count=${#safe_items[@]}
-    local confirm_count=${#confirm_items[@]}
+    printf '%s\n' "Skipped: automatic system changes are disabled by the Atlas safety policy."
+    local safe_count=0
+    local confirm_count=0
 
     run_system_checks
 

@@ -142,8 +142,8 @@ public struct FileOrganizerActionBarModel: Equatable {
         case FileOrganizerStage.preview:
             return FileOrganizerActionBarModel(
                 title: AtlasL10n.string("fileorganizer.stage.actionbar.execute"),
-                isEnabled: inputs.canExecutePlan,
-                promise: AtlasL10n.string("fileorganizer.promise.execute"),
+                isEnabled: AtlasSafetyCapabilities.fileMutationsEnabled && inputs.canExecutePlan,
+                promise: AtlasL10n.string(AtlasSafetyCapabilities.fileMutationsEnabled ? "fileorganizer.promise.execute" : "security.mutation.unavailable"),
                 metricText: nil,
                 progress: nil, intent: .execute
             )

@@ -53,14 +53,8 @@ final class AtlasAppUITests: XCTestCase {
         XCTAssertFalse(app.buttons["smartclean.refreshPreview"].waitForExistence(timeout: 1), "An empty production workspace starts at scan")
         XCTAssertFalse(app.buttons["smartclean.executePreview"].waitForExistence(timeout: 2))
 
-        // `P1-18`（CONTRACT）：设置此前**没有任何菜单入口或键盘路径**，侧栏行的合成
-        // 点击只改焦点不触发导航（本用例原先正是卡在这一步）。现改走**菜单入口** ——
-        // 已验证可用；键盘路径的覆盖情况见 `testSettingsMenuEntryOpensSettings`。
-        let appMenuBar = app.menuBars.firstMatch.menuBarItems.element(boundBy: 1)
-        appMenuBar.click()
-        // `UI-02`：在 **app 菜单自己的子树内**按结构取 Settings 槽位，不写死中文标签
-        // （见 `appMenuSettingsItem`）。
-        Self.appMenuSettingsItem(in: appMenuBar).click()
+        // The dedicated menu test below verifies Settings menu navigation.
+        app.staticTexts["route.settings"].click()
         // 全部按**标识**查、不绑元素类型。原断言写死了 `segmentedControls` / `radioGroups` /
         // `switches` / `steppers` 等角色 —— 而 SwiftUI 控件在 macOS 上的 AX 角色未必一致
         // （如 `.toggleStyle(.switch)` 的 Toggle 就不是 `switch`）。这些断言自 Settings
@@ -157,7 +151,7 @@ final class AtlasAppUITests: XCTestCase {
         let execute = app.buttons["smartclean.executeSelection"]
         XCTAssertTrue(execute.waitForExistence(timeout: 5))
         XCTAssertFalse(execute.isEnabled)
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "暂不可更改文件")).firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@", "smartclean.executeSelection.availability")).firstMatch.waitForExistence(timeout: 5))
     }
 
     func testMissingRecoverySourceShowsReasonAndDisabledRestore() {
@@ -168,11 +162,22 @@ final class AtlasAppUITests: XCTestCase {
         window.typeKey("5", modifierFlags: .command)
         let row = app.staticTexts["Missing source"]
         XCTAssertTrue(row.waitForExistence(timeout: 5))
-        row.click()
+        // The sole recovery entry is selected by the production coordinator.
         XCTAssertTrue(app.staticTexts["ledger.restore.availability"].waitForExistence(timeout: 5))
         let restore = app.buttons["ledger.restore.00000000-0000-0000-0000-000000000099"]
         XCTAssertTrue(restore.waitForExistence(timeout: 5))
         XCTAssertFalse(restore.isEnabled)
+    }
+
+    func testUnknownExecutionShowsRequestAndDurableStatusFacts() {
+        let app = makeApp(fixture: "execution-unknown")
+        app.launch()
+        let unknown = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == %@", "security.requestStatus.unknown")).firstMatch
+        XCTAssertTrue(unknown.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["security.requestStatus.facts"].waitForExistence(timeout: 5))
+        // AtlasCallout exposes its title on the container's accessibility label.
+        XCTAssertTrue(unknown.label.contains("00000000-0000-0000-0000-000000000098"))
     }
 
     /// `P1-18`（CONTRACT）：设置必须有**可点的菜单入口**，且点它能抵达设置屏。

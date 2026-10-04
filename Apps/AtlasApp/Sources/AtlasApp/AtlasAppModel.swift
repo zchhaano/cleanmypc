@@ -321,6 +321,10 @@ final class AtlasAppModel: ObservableObject {
             applyReceiptNoRecoveryFixture()
         case "review-executable":
             applyReviewExecutableFixture()
+        case "execution-unknown":
+            let id = UUID(uuidString: "00000000-0000-0000-0000-000000000098")!
+            pendingUnknownRequestID = id
+            unknownRequestStatus = AtlasRequestStatus(requestID: id, operations: [])
         case "recovery-source-missing":
             let id = UUID(uuidString: "00000000-0000-0000-0000-000000000099")!
             snapshot.recoveryItems = [RecoveryItem(id: id, title: "Missing source", detail: AtlasL10n.string("security.recovery.sourceMissing"),
@@ -508,7 +512,7 @@ final class AtlasAppModel: ObservableObject {
                 updateCheckError = error.localizedDescription
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             withAnimation(.snappy(duration: 0.24)) {
                 latestUpdateResult = nil
             }
@@ -592,7 +596,7 @@ final class AtlasAppModel: ObservableObject {
     }
 
     var canExecuteCurrentSmartCleanPlan: Bool {
-        AtlasSafetyCapabilities.fileMutationsEnabled && !currentPlan.items.isEmpty && isCurrentSmartCleanPlanFresh && currentSmartCleanPlanHasExecutableTargets
+        AtlasSafetyCapabilities.fileMutationsEnabled && pendingUnknownRequestID == nil && !currentPlan.items.isEmpty && isCurrentSmartCleanPlanFresh && currentSmartCleanPlanHasExecutableTargets
     }
 
     var currentSmartCleanPlanHasExecutableTargets: Bool {
@@ -604,7 +608,7 @@ final class AtlasAppModel: ObservableObject {
     }
 
     var canExecuteFileOrganizerPlan: Bool {
-        AtlasSafetyCapabilities.fileMutationsEnabled && !currentFileOrganizerPlan.items.isEmpty && isFileOrganizerPlanFresh
+        AtlasSafetyCapabilities.fileMutationsEnabled && pendingUnknownRequestID == nil && !currentFileOrganizerPlan.items.isEmpty && isFileOrganizerPlanFresh
     }
 
     func refreshHealthSnapshotIfNeeded() async {
@@ -638,7 +642,7 @@ final class AtlasAppModel: ObservableObject {
                 snapshot = output.snapshot
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             latestScanSummary = error.localizedDescription
         }
 
@@ -666,7 +670,7 @@ final class AtlasAppModel: ObservableObject {
                 output.snapshot.permissions.count
             )
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             // `CT-07`：`.permissions` 此前**零生产零读取** —— 权限巡检失败只写进
             // `latestPermissionsSummary`（不带 source 标识的状态行），与 `P0-1`
             // 的根因同类：**失败信息挂在一个谁都可以覆盖的摘要串上**。
@@ -746,7 +750,7 @@ final class AtlasAppModel: ObservableObject {
                 }
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             latestScanSummary = error.localizedDescription
             latestScanProgress = 0
             recordPlan(.smartClean, kind: .failed, message: error.localizedDescription)
@@ -784,7 +788,7 @@ final class AtlasAppModel: ObservableObject {
             }
             return true
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             latestScanSummary = error.localizedDescription
             recordPlan(.smartClean, kind: .failed, message: error.localizedDescription)
             return false
@@ -845,7 +849,7 @@ final class AtlasAppModel: ObservableObject {
                 isCurrentSmartCleanPlanFresh = false
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             latestScanSummary = error.localizedDescription
             recordExecution(.smartClean, kind: .failed, message: error.localizedDescription)
             // Partial-completion receipt (③ error → 「查看回执」, spec §2.3):
@@ -996,7 +1000,7 @@ final class AtlasAppModel: ObservableObject {
                 latestAppsSummary = output.summary
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             latestAppsSummary = error.localizedDescription
         }
 
@@ -1031,7 +1035,7 @@ final class AtlasAppModel: ObservableObject {
                 }
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             latestAppsSummary = error.localizedDescription
         }
 
@@ -1059,7 +1063,7 @@ final class AtlasAppModel: ObservableObject {
                 latestAppsSummary = output.summary
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             latestAppsSummary = error.localizedDescription
         }
 
@@ -1286,7 +1290,7 @@ final class AtlasAppModel: ObservableObject {
                 await refreshPlanPreview()
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             // Clear transient restore state to prevent stale data from leaking
             // into the next refreshApps() call, which would produce false divergence.
             pendingRestoreSnapshotCategoryCounts = nil
@@ -1533,7 +1537,7 @@ final class AtlasAppModel: ObservableObject {
             }
             syncAppearance()
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             latestAppsSummary = error.localizedDescription
         }
     }
@@ -1633,7 +1637,7 @@ final class AtlasAppModel: ObservableObject {
                 clearPlan(.fileOrganizer)
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             fileOrganizerScanSummary = error.localizedDescription
             fileOrganizerProgress = 0
             // `P2-8`：权限受限**不是**「文件整理未能完成」。未授权时保持 `.advisory`
@@ -1697,7 +1701,7 @@ final class AtlasAppModel: ObservableObject {
                 fileOrganizerScanSummary = output.summary
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             fileOrganizerScanSummary = error.localizedDescription
         }
 
@@ -1733,7 +1737,7 @@ final class AtlasAppModel: ObservableObject {
                 }
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             fileOrganizerScanSummary = error.localizedDescription
             recordPlan(.fileOrganizer, kind: .failed, message: error.localizedDescription)
         }
@@ -1820,13 +1824,21 @@ final class AtlasAppModel: ObservableObject {
                 fileOrganizerScanSummary = AtlasL10n.string("model.fileorganizer.ready")
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             recordExecution(.fileOrganizer, kind: .failed, message: error.localizedDescription)
         }
         restoringRecoveryItemID = nil
     }
 
-    private func retainSnapshot(from error: Error) {
+    @Published private(set) var unknownRequestStatus: AtlasRequestStatus?
+    @Published private(set) var pendingUnknownRequestID: UUID?
+
+    private func retainSnapshot(from error: Error) async {
+        if case let AtlasXPCTransportError.resultUnknown(requestID) = error {
+            pendingUnknownRequestID = requestID
+            // Query durable facts only; this never resubmits the mutation.
+            unknownRequestStatus = try? await workspaceController.requestStatus(requestID: requestID)
+        }
         if case let AtlasWorkspaceControllerError.rejected(_, _, retained) = error, let retained {
             snapshot = retained
             fileOrganizerEntries = retained.fileOrganizerEntries
@@ -1888,7 +1900,7 @@ final class AtlasAppModel: ObservableObject {
                 }
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             fileOrganizerScanSummary = error.localizedDescription
             recordExecution(.fileOrganizer, kind: .failed, message: error.localizedDescription)
             // Partial-completion receipt (spec §2.3 ④ error → 「查看回执」):
@@ -1934,7 +1946,7 @@ final class AtlasAppModel: ObservableObject {
             )
             showToast(msg, tone: .success, systemImage: "checkmark.circle")
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             showToast(
                 AtlasL10n.string("fileorganizer.dryRun.error", error.localizedDescription),
                 tone: .danger,
@@ -1976,7 +1988,7 @@ final class AtlasAppModel: ObservableObject {
                 )
             }
         } catch {
-            retainSnapshot(from: error)
+            await retainSnapshot(from: error)
             latestAppsSummary = error.localizedDescription
             // Clear stale snapshot counts — the refresh failed so we can't compare
             pendingRestoreSnapshotCategoryCounts = nil

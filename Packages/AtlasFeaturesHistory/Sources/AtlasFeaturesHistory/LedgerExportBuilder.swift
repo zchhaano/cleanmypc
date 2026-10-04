@@ -175,19 +175,21 @@ public enum LedgerExportController {
                 id: "recovery.\(item.id.uuidString)",
                 displayNumber: nil,
                 kind: AtlasL10n.string("ledger.export.entry.kind.recovery"),
-                status: item.isExpired
-                    ? AtlasL10n.string("ledger.export.entry.status.expired")
-                    : AtlasL10n.string("ledger.export.entry.status.recoverable"),
+                status: item.availabilityText,
                 summary: item.originalPath,
                 startedAt: item.deletedAt,
                 finishedAt: nil,
-                recoveryBytes: item.bytes
+                recoveryBytes: item.isRestorable ? max(0, item.bytes) : nil
             )
         }
         // Chronological (newest first) so runs and recovery items interleave by
         // activity date, mirroring the on-screen timeline.
         let entries = (runEntries + recoveryEntries).sorted { $0.startedAt > $1.startedAt }
-        let totalBytes = recoveryItems.map(\.bytes).reduce(Int64(0), +)
+        let restorableItems = recoveryItems.filter(\.isRestorable)
+        let totalBytes = restorableItems.reduce(Int64(0)) { total, item in
+            let sum = total.addingReportingOverflow(max(0, item.bytes))
+            return sum.overflow ? Int64.max : sum.partialValue
+        }
         let activeCount = taskRuns.filter { $0.status == .queued || $0.status == .running }.count
         let input = LedgerExportBuilder.Input(
             title: AtlasL10n.string("ledger.export.report.title"),
@@ -196,7 +198,7 @@ public enum LedgerExportController {
             entries: entries,
             summary: LedgerExportBuilder.ExportSummary(
                 taskRunCount: taskRuns.count,
-                recoveryItemCount: recoveryItems.count,
+                recoveryItemCount: restorableItems.count,
                 totalRecoveryBytes: totalBytes,
                 activeTaskCount: activeCount
             )

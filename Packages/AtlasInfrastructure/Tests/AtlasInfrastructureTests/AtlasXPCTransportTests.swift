@@ -5,6 +5,11 @@ import AtlasDomain
 import AtlasProtocol
 
 final class AtlasXPCTransportTests: XCTestCase {
+    private func isolatedFallback() -> AtlasScaffoldWorkerService {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return AtlasScaffoldWorkerService(repository: AtlasWorkspaceRepository(stateFileURL: root.appendingPathComponent("state.json")))
+    }
     func testXPCClientRetriesRecoverableFailureAndSucceeds() async throws {
         let attemptCounter = AttemptCounter()
         let request = AtlasRequestEnvelope(command: .healthSnapshot)
@@ -41,7 +46,7 @@ final class AtlasXPCTransportTests: XCTestCase {
     func testPreferredWorkerServiceDoesNotFallbackByDefault() async {
         let service = AtlasPreferredWorkerService(
             requestConfiguration: AtlasXPCRequestConfiguration(timeout: 0.01, retryCount: 0, retryDelay: 0),
-            fallbackWorker: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true),
+            fallbackWorker: isolatedFallback(),
             allowFallback: false
         )
 
@@ -76,7 +81,7 @@ final class AtlasXPCTransportTests: XCTestCase {
         let service = AtlasPreferredWorkerService(
             requestConfiguration: AtlasXPCRequestConfiguration(timeout: 1, retryCount: 0, retryDelay: 0),
             requestExecutor: { _ in responseData },
-            fallbackWorker: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true),
+            fallbackWorker: isolatedFallback(),
             allowFallback: false
         )
 
@@ -106,7 +111,7 @@ final class AtlasXPCTransportTests: XCTestCase {
         let service = AtlasPreferredWorkerService(
             requestConfiguration: AtlasXPCRequestConfiguration(timeout: 1, retryCount: 0, retryDelay: 0),
             requestExecutor: { _ in responseData },
-            fallbackWorker: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true),
+            fallbackWorker: isolatedFallback(),
             allowFallback: true
         )
 

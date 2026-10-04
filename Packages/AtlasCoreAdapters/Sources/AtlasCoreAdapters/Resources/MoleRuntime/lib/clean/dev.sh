@@ -4,28 +4,10 @@ set -euo pipefail
 
 # Tool cache helper (respects DRY_RUN).
 clean_tool_cache() {
-    local description="$1"
-    shift
-    if [[ "$DRY_RUN" != "true" ]]; then
-        local command_succeeded=false
-        if [[ -t 1 ]]; then
-            start_section_spinner "Cleaning $description..."
-        fi
-        if "$@" > /dev/null 2>&1; then
-            command_succeeded=true
-        fi
-        if [[ -t 1 ]]; then
-            stop_section_spinner
-        fi
-        if [[ "$command_succeeded" == "true" ]]; then
-            echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $description"
-        fi
-    else
-        echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} $description · would clean"
-    fi
+    printf '%s\n' "Skipped: external-tool deletion is disabled by the Atlas safety policy."
     return 0
 }
-# npm/pnpm/yarn/bun caches.
+
 clean_dev_npm() {
     local npm_default_cache="$HOME/.npm"
     local npm_cache_path="$npm_default_cache"
@@ -637,171 +619,10 @@ clean_xcode_simulator_runtime_volumes() {
 }
 
 clean_dev_mobile() {
-    check_android_ndk
-    clean_xcode_documentation_cache
-    clean_xcode_simulator_runtime_volumes
-
-    if command -v xcrun > /dev/null 2>&1; then
-        debug_log "Checking for unavailable Xcode simulators"
-        local unavailable_before=0
-        local unavailable_after=0
-        local removed_unavailable=0
-        local unavailable_size_kb=0
-        local unavailable_size_human="0B"
-        local -a unavailable_udids=()
-        local unavailable_udid=""
-
-        # Check if simctl is accessible and working
-        local simctl_available=true
-        if ! xcrun simctl list devices > /dev/null 2>&1; then
-            debug_log "simctl not accessible or CoreSimulator service not running"
-            echo -e "  ${GRAY}${ICON_WARNING}${NC} Xcode unavailable simulators · simctl not available"
-            note_activity
-            simctl_available=false
-        fi
-
-        if [[ "$simctl_available" == "true" ]]; then
-            unavailable_before=$(xcrun simctl list devices unavailable 2> /dev/null | command awk '/\(unavailable/ { count++ } END { print count+0 }' || echo "0")
-            [[ "$unavailable_before" =~ ^[0-9]+$ ]] || unavailable_before=0
-            while IFS= read -r unavailable_udid; do
-                [[ -n "$unavailable_udid" ]] && unavailable_udids+=("$unavailable_udid")
-            done < <(
-                xcrun simctl list devices unavailable 2> /dev/null |
-                    command sed -nE 's/.*\(([0-9A-Fa-f-]{36})\).*\(unavailable.*/\1/p' || true
-            )
-            if [[ ${#unavailable_udids[@]} -gt 0 ]]; then
-                local udid
-                for udid in "${unavailable_udids[@]}"; do
-                    local simulator_device_path="$HOME/Library/Developer/CoreSimulator/Devices/$udid"
-                    if [[ -d "$simulator_device_path" ]]; then
-                        unavailable_size_kb=$((unavailable_size_kb + $(get_path_size_kb "$simulator_device_path")))
-                    fi
-                done
-            fi
-            unavailable_size_human=$(bytes_to_human "$((unavailable_size_kb * 1024))")
-
-            if [[ "$DRY_RUN" == "true" ]]; then
-                if ((unavailable_before > 0)); then
-                    echo -e "  ${YELLOW}${ICON_DRY_RUN}${NC} Xcode unavailable simulators · would clean ${unavailable_before}, ${unavailable_size_human}"
-                else
-                    echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Xcode unavailable simulators · already clean"
-                fi
-            else
-                # Skip if no unavailable simulators
-                if ((unavailable_before == 0)); then
-                    echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Xcode unavailable simulators · already clean"
-                    note_activity
-                else
-                    start_section_spinner "Checking unavailable simulators..."
-
-                    # Capture error output for diagnostics
-                    local delete_output
-                    local delete_exit_code=0
-                    delete_output=$(xcrun simctl delete unavailable 2>&1) || delete_exit_code=$?
-
-                    if [[ $delete_exit_code -eq 0 ]]; then
-                        stop_section_spinner
-                        unavailable_after=$(xcrun simctl list devices unavailable 2> /dev/null | command awk '/\(unavailable/ { count++ } END { print count+0 }' || echo "0")
-                        [[ "$unavailable_after" =~ ^[0-9]+$ ]] || unavailable_after=0
-
-                        removed_unavailable=$((unavailable_before - unavailable_after))
-                        if ((removed_unavailable < 0)); then
-                            removed_unavailable=0
-                        fi
-
-                        if ((removed_unavailable > 0)); then
-                            echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Xcode unavailable simulators · removed ${removed_unavailable}, ${unavailable_size_human}"
-                        else
-                            echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Xcode unavailable simulators · cleanup completed, ${unavailable_size_human}"
-                        fi
-                    else
-                        stop_section_spinner
-
-                        # Analyze error and provide helpful message
-                        local error_hint=""
-                        if echo "$delete_output" | grep -qi "permission denied"; then
-                            error_hint=" (permission denied)"
-                        elif echo "$delete_output" | grep -qi "in use\|busy"; then
-                            error_hint=" (device in use)"
-                        elif echo "$delete_output" | grep -qi "unable to boot\|failed to boot"; then
-                            error_hint=" (boot failure)"
-                        elif echo "$delete_output" | grep -qi "service"; then
-                            error_hint=" (CoreSimulator service issue)"
-                        fi
-
-                        # Try fallback: manual deletion of unavailable device directories
-                        if [[ ${#unavailable_udids[@]} -gt 0 ]]; then
-                            debug_log "Attempting fallback: manual deletion of unavailable simulators"
-                            local manually_removed=0
-                            local manual_failed=0
-
-                            for udid in "${unavailable_udids[@]}"; do
-                                # Validate UUID format (36 chars: 8-4-4-4-12 hex pattern)
-                                if [[ ! "$udid" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]]; then
-                                    debug_log "Invalid UUID format, skipping: $udid"
-                                    ((manual_failed++)) || true
-                                    continue
-                                fi
-
-                                local device_path="$HOME/Library/Developer/CoreSimulator/Devices/$udid"
-                                if [[ -d "$device_path" ]]; then
-                                    # Use safe_remove for validated simulator device directory
-                                    if safe_remove "$device_path" true; then
-                                        ((manually_removed++)) || true
-                                        debug_log "Manually removed simulator: $udid"
-                                    else
-                                        ((manual_failed++)) || true
-                                        debug_log "Failed to manually remove simulator: $udid"
-                                    fi
-                                fi
-                            done
-
-                            if ((manually_removed > 0)); then
-                                if ((manual_failed == 0)); then
-                                    echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Xcode unavailable simulators · removed ${manually_removed} (fallback), ${unavailable_size_human}"
-                                else
-                                    echo -e "  ${YELLOW}${ICON_WARNING}${NC} Xcode unavailable simulators · partially cleaned ${manually_removed}/${#unavailable_udids[@]}, ${unavailable_size_human}"
-                                fi
-                            else
-                                echo -e "  ${GRAY}${ICON_WARNING}${NC} Xcode unavailable simulators cleanup failed${error_hint}"
-                                debug_log "simctl delete error: $delete_output"
-                            fi
-                        else
-                            echo -e "  ${GRAY}${ICON_WARNING}${NC} Xcode unavailable simulators cleanup failed${error_hint}"
-                            debug_log "simctl delete error: $delete_output"
-                        fi
-                    fi
-                fi
-            fi # Close if ((unavailable_before == 0))
-            note_activity
-        fi # End of simctl_available check
-    fi
-    # Old iOS/watchOS/tvOS DeviceSupport versions (debug symbols for connected devices).
-    # Each iOS version creates a 1-3 GB folder of debug symbols. Only the versions
-    # matching currently used devices are needed; older ones regenerate on device connect.
-    clean_xcode_device_support ~/Library/Developer/Xcode/iOS\ DeviceSupport "iOS DeviceSupport"
-    clean_xcode_device_support ~/Library/Developer/Xcode/watchOS\ DeviceSupport "watchOS DeviceSupport"
-    clean_xcode_device_support ~/Library/Developer/Xcode/tvOS\ DeviceSupport "tvOS DeviceSupport"
-    # Simulator runtime caches.
-    safe_clean ~/Library/Developer/CoreSimulator/Profiles/Runtimes/*/Contents/Resources/RuntimeRoot/System/Library/Caches/* "Simulator runtime cache"
-    safe_clean ~/Library/Caches/Google/AndroidStudio*/* "Android Studio cache"
-    # safe_clean ~/Library/Caches/CocoaPods/* "CocoaPods cache"
-    # safe_clean ~/.cache/flutter/* "Flutter cache"
-    safe_clean ~/.android/build-cache/* "Android build cache"
-    safe_clean ~/.android/cache/* "Android SDK cache"
-    safe_clean ~/Library/Developer/Xcode/UserData/IB\ Support/* "Xcode Interface Builder cache"
-    safe_clean ~/.cache/swift-package-manager/* "Swift package manager cache"
-    # Expo/React Native caches (preserve state.json which contains auth tokens).
-    safe_clean ~/.expo/expo-go/* "Expo Go cache"
-    safe_clean ~/.expo/android-apk-cache/* "Expo Android APK cache"
-    safe_clean ~/.expo/ios-simulator-app-cache/* "Expo iOS simulator app cache"
-    safe_clean ~/.expo/native-modules-cache/* "Expo native modules cache"
-    safe_clean ~/.expo/schema-cache/* "Expo schema cache"
-    safe_clean ~/.expo/template-cache/* "Expo template cache"
-    safe_clean ~/.expo/versions-cache/* "Expo versions cache"
+    printf '%s\n' "Skipped: external-tool deletion is disabled by the Atlas safety policy."
+    return 0
 }
-# JVM ecosystem caches.
-# Gradle: Respects whitelist, cleaned when not protected via: mo clean --whitelist
+
 clean_dev_jvm() {
     # Source Maven cleanup module (requires bash for BASH_SOURCE)
     # shellcheck disable=SC1091

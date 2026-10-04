@@ -432,7 +432,7 @@ clean_application_support_logs
 EOF
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Skipped: No permission"* ]]
+    [[ "$output" == *"disabled by the Atlas safety policy"* ]]
 }
 
 @test "clean_apple_silicon_caches exits when not M-series" {

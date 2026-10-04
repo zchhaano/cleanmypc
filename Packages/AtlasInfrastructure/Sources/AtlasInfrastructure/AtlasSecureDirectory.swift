@@ -32,7 +32,7 @@ final class AtlasSecureDirectory: @unchecked Sendable {
     deinit { close(descriptor) }
     func openFile(_ name: String, flags: Int32) throws -> Int32 {
         guard !name.isEmpty, !name.contains("/"), !name.contains("\0") else { throw AtlasJournalError.unsafeStorage }
-        let fd = openat(descriptor, name, flags | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        let fd = openat(descriptor, name, flags | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
         guard fd >= 0 else { throw AtlasJournalError.io(errno) }
         var info = stat()
         guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid(), info.st_nlink == 1 else { close(fd); throw AtlasJournalError.unsafeStorage }

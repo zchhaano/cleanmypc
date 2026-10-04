@@ -92,13 +92,15 @@ final class AppShellTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeModel() -> AtlasAppModel {
-        AtlasAppModel(
-            repository: AtlasWorkspaceRepository(
+        let repository = AtlasWorkspaceRepository(
                 stateFileURL: FileManager.default.temporaryDirectory
                     .appendingPathComponent(UUID().uuidString, isDirectory: true)
                     .appendingPathComponent("workspace-state.json")
-            ),
-            workerService: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true),
+            )
+        addTeardownBlock { try? FileManager.default.removeItem(at: repository.directoryURL) }
+        return AtlasAppModel(
+            repository: repository,
+            workerService: AtlasScaffoldWorkerService(repository: repository, allowStateOnlyCleanExecution: true),
             ledgerNumberStore: ShellTestLedgerStore()
         )
     }

@@ -10,7 +10,8 @@ import AtlasProtocol
 final class AtlasAppModelTests: XCTestCase {
 
     func testCurrentSmartCleanPlanStartsAsCachedUntilSessionRefresh() throws {
-        let model = AtlasAppModel(repository: makeRepository(), workerService: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true), ledgerNumberStore: InMemoryLedgerNumberStore())
+        let repository = makeRepository()
+        let model = AtlasAppModel(repository: repository, workerService: AtlasScaffoldWorkerService(repository: repository, allowStateOnlyCleanExecution: true), ledgerNumberStore: InMemoryLedgerNumberStore())
 
         XCTAssertFalse(model.isCurrentSmartCleanPlanFresh)
         XCTAssertFalse(model.canExecuteCurrentSmartCleanPlan)
@@ -73,7 +74,7 @@ final class AtlasAppModelTests: XCTestCase {
             settings: AtlasScaffoldWorkspace.state().settings
         )
         _ = try? repository.saveState(state)
-        let model = AtlasAppModel(repository: repository, workerService: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true), ledgerNumberStore: InMemoryLedgerNumberStore())
+        let model = AtlasAppModel(repository: repository, workerService: AtlasScaffoldWorkerService(repository: repository, allowStateOnlyCleanExecution: true), ledgerNumberStore: InMemoryLedgerNumberStore())
 
         XCTAssertFalse(model.currentSmartCleanPlanHasExecutableTargets)
         XCTAssertFalse(model.canExecuteCurrentSmartCleanPlan)
@@ -119,7 +120,7 @@ final class AtlasAppModelTests: XCTestCase {
             settings: AtlasScaffoldWorkspace.state().settings
         )
         _ = try? repository.saveState(state)
-        let model = AtlasAppModel(repository: repository, workerService: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true), ledgerNumberStore: InMemoryLedgerNumberStore())
+        let model = AtlasAppModel(repository: repository, workerService: AtlasScaffoldWorkerService(repository: repository, allowStateOnlyCleanExecution: true), ledgerNumberStore: InMemoryLedgerNumberStore())
 
         XCTAssertTrue(model.currentSmartCleanPlanHasExecutableTargets)
     }
@@ -374,9 +375,10 @@ final class AtlasAppModelTests: XCTestCase {
     /// 否则 `I-4` 的 UI 断言会在 `execute.isEnabled` 上假失败。
     /// 逐项断言判据链，把排查从每次 ~60s 的 UI 运行降回秒级。
     func testReviewExecutableFixtureProducesExecutablePlan() throws {
+        let repository = makeRepository()
         let model = AtlasAppModel(
-            repository: makeRepository(),
-            workerService: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true),
+            repository: repository,
+            workerService: AtlasScaffoldWorkerService(repository: repository, allowStateOnlyCleanExecution: true),
             ledgerNumberStore: InMemoryLedgerNumberStore()
         )
         model.applyUITestFixture("review-executable")
@@ -407,7 +409,7 @@ final class AtlasAppModelTests: XCTestCase {
         let repository = makeRepository()
         let model = AtlasAppModel(
             repository: repository,
-            workerService: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true),
+            workerService: AtlasScaffoldWorkerService(repository: repository, allowStateOnlyCleanExecution: true),
             ledgerNumberStore: InMemoryLedgerNumberStore()
         )
         model.applyUITestFixture("review-executable")
@@ -820,7 +822,8 @@ final class AtlasAppModelTests: XCTestCase {
     }
 
     func testToggleTaskCenterFlipsPresentationState() throws {
-        let model = AtlasAppModel(repository: makeRepository(), workerService: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true), ledgerNumberStore: InMemoryLedgerNumberStore())
+        let repository = makeRepository()
+        let model = AtlasAppModel(repository: repository, workerService: AtlasScaffoldWorkerService(repository: repository, allowStateOnlyCleanExecution: true), ledgerNumberStore: InMemoryLedgerNumberStore())
 
         XCTAssertFalse(model.isTaskCenterPresented)
         model.toggleTaskCenter()
@@ -860,6 +863,7 @@ final class AtlasAppModelTests: XCTestCase {
 
     private func makeRepository(nowProvider: @escaping @Sendable () -> Date = { Date() }) -> AtlasWorkspaceRepository {
         let repository = AtlasWorkspaceRepository(stateFileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("workspace-state.json"), nowProvider: nowProvider)
+        addTeardownBlock { try? FileManager.default.removeItem(at: repository.directoryURL) }
         _ = try? repository.saveState(AtlasScaffoldWorkspace.state())
         return repository
     }

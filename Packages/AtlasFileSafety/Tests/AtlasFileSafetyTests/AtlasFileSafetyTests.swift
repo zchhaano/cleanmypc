@@ -4,6 +4,15 @@ import XCTest
 @testable import AtlasFileSafety
 
 final class AtlasFileSafetyTests: XCTestCase {
+    func testOrganizerRefusesProtectedRootsRegardlessOfCase() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: home) }
+        for name in ["library", "LIBRARY", "applications", "APPLICATIONS", ".trash", ".TRASH"] {
+            let root = home.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            XCTAssertThrowsError(try AtlasFileSafetyPolicy.validateOrganizerRoot(root, homeDirectoryURL: home))
+        }
+    }
     func testPolicyAndMoverPreserveConflictsAndUnselectedFiles() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).resolvingSymlinksInPath()
         defer { try? FileManager.default.removeItem(at: home) }

@@ -51,7 +51,20 @@ struct AppShellView: View {
         } detail: {
             let route = model.selection ?? .overview
 
-            detailContent(for: route)
+            VStack(spacing: AtlasSpacing.sm) {
+                if let requestID = model.pendingUnknownRequestID {
+                    AtlasCallout(title: AtlasL10n.string("security.execution.unknown", requestID.uuidString),
+                        detail: AtlasL10n.string("security.recovery.reconciliationRequired"), tone: .warning, systemImage: "exclamationmark.triangle")
+                        .accessibilityIdentifier("security.requestStatus.unknown")
+                    if let status = model.unknownRequestStatus {
+                        Text(AtlasL10n.string("security.execution.result", status.operations.filter { [.moved, .restored].contains($0.state) }.count,
+                            status.operations.filter { $0.state == .failed }.count))
+                            .font(AtlasTypography.caption)
+                            .accessibilityIdentifier("security.requestStatus.facts")
+                    }
+                }
+                detailContent(for: route)
+            }
                 .toolbar {
                     // Scan-receipt chip (spec §2.1): current module's latest
                     // receipt; hidden when the route has none.

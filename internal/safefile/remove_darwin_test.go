@@ -111,3 +111,14 @@ func TestRejectMountAndUnselectedRoot(t *testing.T) {
 		t.Fatal("scope root")
 	}
 }
+
+func TestPrivilegedOrMismatchedCredentialsAreRejected(t *testing.T) {
+	for _, ids := range [][2]int{{0, 0}, {501, 0}, {0, 501}, {501, 502}} {
+		if ordinaryCredentials(ids[0], ids[1]) == nil {
+			t.Fatalf("accepted credentials %v", ids)
+		}
+	}
+	if ordinaryCredentials(501, 501) != nil {
+		t.Fatal("ordinary user denied")
+	}
+}

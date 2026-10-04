@@ -3,7 +3,18 @@ import Foundation
 
 public final class AtlasMutationLease: @unchecked Sendable {
     private let descriptor: Int32
-    fileprivate init(descriptor: Int32) { self.descriptor = descriptor }
+    private let device: Int32
+    private let inode: UInt64
+    fileprivate init(descriptor: Int32, directory: AtlasSecureDirectory) throws {
+        self.descriptor = descriptor
+        var info = stat()
+        guard fstat(directory.descriptor, &info) == 0 else { throw AtlasJournalError.unsafeStorage }
+        device = info.st_dev; inode = UInt64(info.st_ino)
+    }
+    func validates(_ directory: AtlasSecureDirectory) -> Bool {
+        var info = stat()
+        return fstat(directory.descriptor, &info) == 0 && info.st_dev == device && UInt64(info.st_ino) == inode
+    }
     deinit { flock(descriptor, LOCK_UN); close(descriptor) }
 }
 public final class AtlasMutationCoordinator: @unchecked Sendable {
@@ -12,7 +23,8 @@ public final class AtlasMutationCoordinator: @unchecked Sendable {
     private func acquire() throws -> AtlasMutationLease {
         let fd = try directory.openFile("mutation.lock", flags: O_RDWR | O_CREAT)
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else { close(fd); throw AtlasJournalError.busy }
-        return AtlasMutationLease(descriptor: fd)
+        do { return try AtlasMutationLease(descriptor: fd, directory: directory) }
+        catch { flock(fd, LOCK_UN); close(fd); throw error }
     }
     public func withLease<T: Sendable>(_ body: @Sendable (AtlasMutationLease) async throws -> T) async throws -> T {
         let lease = try acquire()

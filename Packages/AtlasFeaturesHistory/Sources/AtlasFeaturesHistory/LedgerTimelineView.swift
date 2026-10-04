@@ -165,13 +165,12 @@ public enum LedgerEntryMapping {
     }
 
     private static func status(for item: RecoveryItem, now: Date) -> AtlasLedgerEntryStatus {
-        guard let expiresAt = item.expiresAt else {
-            return .verified // no expiry ⇒ permanently recoverable record
-        }
-        if expiresAt <= now {
+        if item.recoveryAvailability == .restored { return .verified }
+        if let expiresAt = item.expiresAt, expiresAt <= now {
             // `P1-15`：过期是**不可恢复**的终态，不再与「任务失败/取消」共用「已归档」。
             return .expired
         }
+        guard item.isRestorable, let expiresAt = item.expiresAt else { return .archived }
         let daysLeft = max(0, Calendar.current.dateComponents([.day], from: now, to: expiresAt).day ?? 0)
         return .recoverable(daysLeft: daysLeft)
     }

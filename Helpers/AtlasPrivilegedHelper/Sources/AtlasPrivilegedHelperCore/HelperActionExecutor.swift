@@ -15,7 +15,7 @@ public struct AtlasPrivilegedHelperActionExecutor {
         self.evidenceDirectoryURL = evidenceDirectoryURL ?? homeDirectoryURL.appendingPathComponent("Library/Application Support/AtlasForMac")
     }
     public func validateEvidence(_ action: AtlasHelperAction) throws -> AtlasValidatedFileOperation {
-        guard getuid() != 0, action.kind == .trashItems || action.kind == .restoreItem,
+        guard getuid() != 0 && geteuid() == getuid(), action.kind == .trashItems || action.kind == .restoreItem,
               let operationID = action.operationID, let planID = action.planID,
               let digest = action.planDigest, action.policyRevision == 1, let expected = action.expectedIdentity else {
             throw HelperValidationError.pathNotAllowed(action.targetPath)

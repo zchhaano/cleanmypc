@@ -51,6 +51,20 @@ final class AtlasAppSafetyTests: XCTestCase {
         await model.inspectPermissions()
         XCTAssertEqual(model.snapshot.recoveryItems.map(\.id), [item.id])
     }
+    func testUnknownMutationQueriesStatusAndNeverReplays() async throws {
+        let repo = repository(); _ = try repo.saveState(.empty)
+        let worker = SafetyUnknownWorker()
+        let model = AtlasAppModel(repository: repo, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
+        model.applyUITestFixture("review-executable")
+        await model.executeCurrentPlan()
+        let commands = await worker.commands
+        XCTAssertEqual(commands.count, 2)
+        guard case .executePlan = commands[0], case .requestStatus = commands[1] else { return XCTFail("Mutation was replayed instead of queried") }
+        XCTAssertNotNil(model.pendingUnknownRequestID)
+        XCTAssertTrue(model.unknownRequestStatus?.requiresReconciliation == true)
+        XCTAssertFalse(model.smartCleanExecutionCompleted)
+        XCTAssertFalse(model.canExecuteCurrentSmartCleanPlan)
+    }
     func testSourceMissingFixtureCarriesTruthfulAvailability() throws {
         let model = AtlasAppModel(repository: repository(), ledgerNumberStore: InMemoryLedgerNumberStore())
         model.applyUITestFixture("recovery-source-missing")
@@ -68,5 +82,16 @@ private struct SafetyRejectedWorker: AtlasWorkerServing {
     let snapshot: AtlasWorkspaceSnapshot
     func submit(_ request: AtlasRequestEnvelope) async throws -> AtlasWorkerCommandResult {
         .init(request: request, response: .init(requestID: request.id, response: .rejected(code: .executionUnavailable, reason: "save failed")), events: [], snapshot: snapshot)
+    }
+}
+
+private actor SafetyUnknownWorker: AtlasWorkerServing {
+    var commands: [AtlasCommand] = []
+    func submit(_ request: AtlasRequestEnvelope) async throws -> AtlasWorkerCommandResult {
+        commands.append(request.command)
+        if case let .requestStatus(requestID) = request.command {
+            return .init(request: request, response: .init(requestID: request.id, response: .requestStatus(.init(requestID: requestID, operations: []))), events: [], snapshot: AtlasWorkspaceState.empty.snapshot)
+        }
+        throw AtlasXPCTransportError.resultUnknown(requestID: request.id)
     }
 }

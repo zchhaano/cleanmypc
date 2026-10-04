@@ -26,15 +26,12 @@ COVER_SIZE="3000,1720"
 
 mkdir -p "$OUTPUT_DIR"
 
-# 同一个 debug 二进制的两个实例会互相打架（后一个抢渲染上下文），
-# 所以先请走路上的那个。`-x` 是精确进程名匹配，不会误伤别的 swift 进程。
-if pgrep -x AtlasApp >/dev/null 2>&1; then
-    echo "发现正在运行的 AtlasApp，先结束它（两个实例会抢渲染上下文）..."
-    pkill -x AtlasApp || true
-    sleep 1
-fi
+# Export never terminates an unrelated app or shares a browser profile.
+CHROME_PROFILE="$(mktemp -d "${TMPDIR:-/tmp}/atlas-readme-chrome.XXXXXX")"
+trap 'rm -rf "$CHROME_PROFILE"' EXIT
 
 echo "[1/3] Swift 渲染（4 路由 × 2 语言 + 图标）..."
+ATLAS_STATE_DIR="$CHROME_PROFILE/state" ATLAS_STATE_FILE="$CHROME_PROFILE/state/workspace-state.json" \
 ATLAS_EXPORT_README_ASSETS_DIR="$OUTPUT_DIR" \
     swift run --package-path "$ROOT_DIR/Apps" AtlasApp
 
@@ -64,13 +61,64 @@ for required in cover.html atlas-logo.png atlas-overview-en.png; do
     fi
 done
 
-(
-    cd "$OUTPUT_DIR"
-    "$CHROME_BIN" \
-        --headless=new --disable-gpu --hide-scrollbars --no-sandbox \
-        --force-device-scale-factor=1 --window-size="$COVER_SIZE" \
-        --screenshot=fig01-cover.png "file://$(pwd)/cover.html"
-)
+python3 - "$CHROME_BIN" "$CHROME_PROFILE" "$OUTPUT_DIR" "$COVER_SIZE" <<'PY_RENDER'
+import os, signal, struct, subprocess, sys, time, zlib
+from pathlib import Path
+binary, profile, output, size = sys.argv[1:]
+image = Path(output) / 'fig01-cover.png'
+image.unlink(missing_ok=True) # Never accept the previous export.
+command = [binary, '--headless=new', '--disable-gpu', '--hide-scrollbars',
+    '--no-first-run', '--no-default-browser-check', '--disable-background-networking',
+    '--disable-component-update', '--disable-sync', '--disable-crash-reporter',
+    '--timeout=15000', '--virtual-time-budget=3000', '--user-data-dir=' + profile,
+    '--force-device-scale-factor=1', '--window-size=' + size,
+    '--screenshot=fig01-cover.png', (Path(output) / 'cover.html').as_uri()]
+def complete_png():
+    try:
+        data = image.read_bytes()
+        if data[:8] != b'\x89PNG\r\n\x1a\n': return False
+        offset = 8
+        while offset + 12 <= len(data):
+            length = struct.unpack('>I', data[offset:offset+4])[0]
+            end = offset + 12 + length
+            if end > len(data): return False
+            chunk = data[offset+4:end-4]
+            if zlib.crc32(chunk) != struct.unpack('>I', data[end-4:end])[0]: return False
+            if chunk[:4] == b'IHDR' and struct.unpack('>II', chunk[4:12]) != tuple(map(int, size.split(','))): return False
+            if chunk[:4] == b'IEND': return end == len(data)
+            offset = end
+    except (OSError, struct.error): pass
+    return False
+process = subprocess.Popen(command, cwd=output, start_new_session=True)
+completed = False
+try:
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        result = process.poll()
+        if result is not None:
+            if result != 0: sys.exit(result)
+            completed = complete_png()
+            break
+        if complete_png():
+            completed = True
+            break
+        time.sleep(0.1)
+finally:
+    # Some Chrome versions leave the browser running after emitting the complete PNG.
+    # Only this invocation's newly created process group is terminated.
+    try: os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError: pass
+    try: process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        try: os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError: pass
+        process.wait(timeout=1)
+if not completed:
+    print('Cover renderer did not produce a complete PNG; export is incomplete.', file=sys.stderr)
+    sys.exit(124)
+print('Complete cover PNG received; renderer group stopped. Pixel validation follows.')
+
+PY_RENDER
 
 echo "[3/3] 重建 manifest.json..."
 python3 "$ROOT_DIR/scripts/atlas/readme_media_gate.py" --build-manifest --root "$ROOT_DIR"
@@ -80,4 +128,4 @@ echo "过一遍媒体门禁..."
 
 # 门禁是本脚本的最后一道自检：导出产出的东西必须立刻能过六维。
 # 退出码原样透传（0/1/2），不吞。
-exec "$ROOT_DIR/scripts/atlas/readme-media-gate.sh" --root "$ROOT_DIR"
+"$ROOT_DIR/scripts/atlas/readme-media-gate.sh" --root "$ROOT_DIR"

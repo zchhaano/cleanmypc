@@ -40,7 +40,12 @@ public enum AtlasFileSafetyPolicy {
         return url
     }
     static func forbiddenOrganizerPath(_ url: URL, home: URL) -> Bool {
-        ["Library", "Applications", ".Trash"].contains { let root = home.appendingPathComponent($0); return url.path == root.path || isDescendant(url, of: root) }
+        // Conservatively refuse all case spellings on both APFS modes.
+        let path = url.standardizedFileURL.path.lowercased()
+        return ["Library", "Applications", ".Trash"].contains {
+            let root = home.appendingPathComponent($0).standardizedFileURL.path.lowercased()
+            return path == root || path.hasPrefix(root + "/")
+        }
     }
     public static func validate(_ intent: AtlasFileOperationIntent, context: AtlasFilePolicyContext) throws -> AtlasValidatedFileOperation {
         let home = context.homeDirectoryURL

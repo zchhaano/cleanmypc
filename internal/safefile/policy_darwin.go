@@ -29,7 +29,7 @@ func requestParts(req RemoveRequest) ([]string, error) {
 }
 func trustedCacheRoot() (string, int, error) {
 	uid := os.Getuid()
-	if uid == 0 {
+	if err := ordinaryCredentials(uid, os.Geteuid()); err != nil {
 		return "", uid, errPolicy
 	}
 	account, err := user.LookupId(strconv.Itoa(uid))
@@ -74,6 +74,13 @@ func checkObject(s *unix.Stat_t, uid int, device int32) error {
 		}
 	case unix.S_IFDIR:
 	default:
+		return errPolicy
+	}
+	return nil
+}
+
+func ordinaryCredentials(uid, euid int) error {
+	if uid == 0 || euid == 0 || uid != euid {
 		return errPolicy
 	}
 	return nil

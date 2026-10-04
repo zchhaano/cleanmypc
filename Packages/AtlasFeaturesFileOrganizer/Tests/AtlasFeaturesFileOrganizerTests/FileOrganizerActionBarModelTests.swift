@@ -96,7 +96,7 @@ final class FileOrganizerActionBarModelTests: XCTestCase {
         let m = FileOrganizerActionBarModel.resolve(inputs(
             effectiveStage: FileOrganizerStage.preview, canExecutePlan: true))
         XCTAssertEqual(m.intent, .execute)
-        XCTAssertTrue(m.isEnabled)
+        XCTAssertFalse(m.isEnabled)
     }
 
     func testPreviewStageExecuteDisabledWhenPlanNotExecutable() {
