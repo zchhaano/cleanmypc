@@ -157,15 +157,20 @@ public struct LedgerDetailView: View {
 
     /// Restore actions — same recovery point as the SmartClean undo toast.
     private func restoreActions(_ item: RecoveryItem) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack { Spacer(minLength: 0); restoreButton(item) }
-            VStack(alignment: .leading) { restoreButton(item) }
+        VStack(alignment: .leading, spacing: AtlasSpacing.sm) {
+            Text(AtlasSafetyCapabilities.fileMutationsEnabled ? restoreHint(item) : AtlasL10n.string("security.mutation.unavailable"))
+                .font(AtlasTypography.caption)
+                .accessibilityIdentifier("ledger.restore.availability")
+            ViewThatFits(in: .horizontal) {
+                HStack { Spacer(minLength: 0); restoreButton(item) }
+                VStack(alignment: .leading) { restoreButton(item) }
+            }
         }
     }
 
     private func restoreButton(_ item: RecoveryItem) -> some View {
         let isRestoring = restoringItemID == item.id
-        let canRestore = restoringItemID == nil && !item.isExpired
+        let canRestore = AtlasSafetyCapabilities.fileMutationsEnabled && item.recoveryAvailability == .ready && restoringItemID == nil && !item.isExpired
         return Button(isRestoring ? restoreTitle(item, running: true) : restoreTitle(item, running: false)) {
             onRestoreItem(item.id)
         }
@@ -183,7 +188,8 @@ public struct LedgerDetailView: View {
     }
 
     private func restoreHint(_ item: RecoveryItem) -> String {
-        AtlasL10n.string(item.hasPhysicalRestorePath ? "ledger.restore.hint.fileBacked" : "ledger.restore.hint.stateOnly")
+        AtlasL10n.string(item.recoveryAvailability?.explanationKey ?? "security.recovery.unverified")
+
     }
 
     // Callout copy table (legacy behavior preserved, keys renamed ledger.*).
@@ -204,6 +210,7 @@ public enum LedgerSelection: Equatable {
 
 private struct RecoveryCalloutCopy {
     func title(_ item: RecoveryItem) -> String {
+        if item.recoveryAvailability != .ready { return AtlasL10n.string(item.recoveryAvailability?.explanationKey ?? "security.recovery.unverified") }
         if item.isExpired { return AtlasL10n.string("ledger.detail.recovery.callout.expired.title") }
         switch (item.hasPhysicalRestorePath, item.isExpiringSoon) {
         case (true, true): return AtlasL10n.string("ledger.detail.recovery.callout.expiring.fileBacked.title")
@@ -213,6 +220,7 @@ private struct RecoveryCalloutCopy {
         }
     }
     func detail(_ item: RecoveryItem) -> String {
+        if item.recoveryAvailability != .ready { return AtlasL10n.string(item.recoveryAvailability?.explanationKey ?? "security.recovery.unverified") }
         if item.isExpired { return AtlasL10n.string("ledger.detail.recovery.callout.expired.detail") }
         switch (item.hasPhysicalRestorePath, item.isExpiringSoon) {
         case (true, true): return AtlasL10n.string("ledger.detail.recovery.callout.expiring.fileBacked.detail")
@@ -222,11 +230,13 @@ private struct RecoveryCalloutCopy {
         }
     }
     func tone(_ item: RecoveryItem) -> AtlasTone {
+        if item.recoveryAvailability != .ready { return .warning }
         if item.isExpired { return .neutral }
         if item.isExpiringSoon { return .warning }
         return item.hasPhysicalRestorePath ? .success : .neutral
     }
     func symbol(_ item: RecoveryItem) -> String {
+        if item.recoveryAvailability != .ready { return "exclamationmark.triangle" }
         if item.isExpired { return "archivebox" }
         if item.isExpiringSoon { return "exclamationmark.triangle.fill" }
         return item.hasPhysicalRestorePath ? "checkmark.circle.fill" : "rectangle.stack.badge.person.crop"

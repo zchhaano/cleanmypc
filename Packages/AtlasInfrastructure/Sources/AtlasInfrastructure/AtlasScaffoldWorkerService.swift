@@ -21,6 +21,10 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
     private let allowStateOnlyCleanExecution: Bool
     private let planRegistry = AtlasActionPlanRegistry()
     private var organizerRoots: [URL] = []
+    private var organizerPreviews: [UUID: ActionPlan] = [:]
+    private let mutationsEnabledForTesting: Bool
+    private var didReconcile = false
+    private var persistenceFailure: String?
     private var state: AtlasWorkspaceState
     private var pendingAppUninstallSnapshots: [UUID: AtlasAppUninstallEvidenceSnapshot] = [:]
 
@@ -37,8 +41,14 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         auditStore: AtlasAuditStore = AtlasAuditStore(),
         nowProvider: @escaping @Sendable () -> Date = { Date() },
         allowProviderFailureFallback: Bool = ProcessInfo.processInfo.environment["ATLAS_ALLOW_PROVIDER_FAILURE_FALLBACK"] == "1",
+        mutationsEnabledForTesting: Bool = false,
         allowStateOnlyCleanExecution: Bool = ProcessInfo.processInfo.environment["ATLAS_ALLOW_STATE_ONLY_CLEAN_EXECUTION"] == "1"
     ) {
+        #if DEBUG
+        self.mutationsEnabledForTesting = mutationsEnabledForTesting
+        #else
+        self.mutationsEnabledForTesting = false
+        #endif
         self.repository = repository
         self.auditStore = auditStore
         self.permissionInspector = permissionInspector
@@ -50,18 +60,61 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         self.fileOrganizerScanProvider = fileOrganizerScanProvider
         self.fileOrganizerClassifier = fileOrganizerClassifier
         self.nowProvider = nowProvider
+        #if DEBUG
         self.allowProviderFailureFallback = allowProviderFailureFallback
         self.allowStateOnlyCleanExecution = allowStateOnlyCleanExecution
-        self.state = repository.loadState()
+        #else
+        self.allowProviderFailureFallback = false
+        self.allowStateOnlyCleanExecution = false
+        #endif
+        do { self.state = try repository.loadState() }
+        catch { self.state = .empty; self.persistenceFailure = error.localizedDescription }
         AtlasL10n.setCurrentLanguage(self.state.settings.language)
     }
 
     public func submit(_ request: AtlasRequestEnvelope) async throws -> AtlasWorkerCommandResult {
+        if let persistenceFailure {
+            if !didReconcile, let inspection = try? AtlasOperationJournal(directoryURL: repository.directoryURL).inspect() {
+                didReconcile = true
+                var latest: [UUID: AtlasOperationRecord] = [:]
+                for record in inspection.records { latest[record.operationID] = record }
+                projectOperations(Array(latest.values), forceReconciliation: true)
+            }
+            return rejectedResult(for: request, code: .executionUnavailable, reason: persistenceFailure)
+        }
+        if !didReconcile {
+            didReconcile = true
+            do {
+                // Re-read under the repository lease at the first actual request; initialization may precede another process's save.
+                state = try repository.loadState()
+                projectOperations(try await AtlasJournalReconciler(directoryURL: repository.directoryURL).reconcile())
+            }
+            catch {
+                if let inspection = try? AtlasOperationJournal(directoryURL: repository.directoryURL).inspect() {
+                    var latest: [UUID: AtlasOperationRecord] = [:]
+                    for record in inspection.records { latest[record.operationID] = record }
+                    projectOperations(Array(latest.values), forceReconciliation: true)
+                }
+                persistenceFailure = error.localizedDescription
+                return rejectedResult(for: request, code: .executionUnavailable, reason: error.localizedDescription)
+            }
+        }
+        let result = try await process(request)
+        if let persistenceFailure {
+            var failed = result
+            failed.response = AtlasResponseEnvelope(requestID: request.id, response: .rejected(code: .executionUnavailable, reason: persistenceFailure))
+            return failed
+        }
+        return result
+    }
+
+    private func process(_ request: AtlasRequestEnvelope) async throws -> AtlasWorkerCommandResult {
         AtlasL10n.setCurrentLanguage(state.settings.language)
         // Release capability remains closed until recovery and VM acceptance are recorded.
         // Environment variables cannot enable file mutations.
         switch request.command {
         case .executePlan, .fileOrganizerExecutePlan, .executeAppUninstall, .restoreItems:
+            if mutationsEnabledForTesting { return try await executeRegisteredMutation(request) }
             return rejectedResult(for: request, code: .executionUnavailable,
                 reason: AtlasL10n.string("security.mutation.unavailable"))
         default: break
@@ -72,6 +125,10 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
             await pruneExpiredRecoveryItemsIfNeeded(context: "process request \(request.id.uuidString)")
         }
         switch request.command {
+        case let .requestStatus(requestID):
+            let service = try AtlasNativeMutationService(directoryURL: repository.directoryURL, registry: planRegistry, context: .init())
+            return AtlasWorkerCommandResult(request: request, response: AtlasResponseEnvelope(requestID: request.id,
+                response: .requestStatus(try service.status(requestID: requestID))), events: [], snapshot: state.snapshot)
         case .healthSnapshot:
             return try await healthSnapshot(using: request)
         case .inspectPermissions:
@@ -80,16 +137,16 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
             return await startScan(using: request, taskID: taskID)
         case let .previewPlan(_, findingIDs):
             return await previewPlan(using: request, findingIDs: findingIDs)
-        case let .executePlan(planID):
-            return await executePlan(using: request, planID: planID)
-        case let .restoreItems(taskID, itemIDs):
-            return await restoreItems(using: request, taskID: taskID, itemIDs: itemIDs)
+        case .executePlan:
+            return rejectedResult(for: request, code: .executionUnavailable, reason: AtlasL10n.string("security.mutation.unavailable"))
+        case .restoreItems:
+            return rejectedResult(for: request, code: .executionUnavailable, reason: AtlasL10n.string("security.mutation.unavailable"))
         case .appsList:
             return await listApps(using: request)
         case let .previewAppUninstall(appID):
             return await previewAppUninstall(using: request, appID: appID)
-        case let .executeAppUninstall(appID, planID):
-            return await executeAppUninstall(using: request, appID: appID, planID: planID)
+        case .executeAppUninstall:
+            return rejectedResult(for: request, code: .executionUnavailable, reason: AtlasL10n.string("security.mutation.unavailable"))
         case .settingsGet:
             return await settingsGet(using: request)
         case let .settingsSet(settings):
@@ -100,11 +157,104 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
             return await fileOrganizerClassify(using: request, taskID: taskID, entryIDs: entryIDs)
         case let .fileOrganizerPreviewPlan(taskID, entryIDs):
             return await fileOrganizerPreviewPlan(using: request, taskID: taskID, entryIDs: entryIDs)
-        case let .fileOrganizerExecutePlan(planID):
-            return await fileOrganizerExecutePlan(using: request, planID: planID)
+        case .fileOrganizerExecutePlan:
+            return rejectedResult(for: request, code: .executionUnavailable, reason: AtlasL10n.string("security.mutation.unavailable"))
         case let .fileOrganizerDryRun(planID):
             return await fileOrganizerDryRun(using: request, planID: planID)
         }
+    }
+
+    private func projectOperations(_ records: [AtlasOperationRecord], forceReconciliation: Bool = false) {
+        for record in records {
+            var availability: AtlasRecoveryAvailability
+            switch record.state {
+            case .moved:
+                if let destination = record.destinationPath, let expected = record.destinationIdentity {
+                    let actual = try? AtlasFileIdentityReader.read(URL(fileURLWithPath: destination))
+                    availability = actual == expected ? .ready : (actual == nil ? .sourceMissing : .reconciliationRequired)
+                } else { availability = .reconciliationRequired }
+            case .restored: availability = .restored
+            case .planned, .restorePlanned, .reconciliationRequired: availability = .reconciliationRequired
+            case .failed: continue
+            }
+            if forceReconciliation { availability = .reconciliationRequired }
+            let mappings = record.destinationPath.map { [RecoveryPathMapping(originalPath: record.sourcePath,
+                trashedPath: $0, operationID: record.operationID, sourceIdentity: record.sourceIdentity, trashedIdentity: record.destinationIdentity)] }
+            let item = RecoveryItem(id: record.operationID, title: URL(fileURLWithPath: record.sourcePath).lastPathComponent,
+                detail: AtlasL10n.string(availability.explanationKey), originalPath: record.sourcePath, bytes: 0,
+                deletedAt: record.timestamp, restoreMappings: mappings, recoveryAvailability: availability)
+            if let index = state.snapshot.recoveryItems.firstIndex(where: { $0.id == record.operationID }) { state.snapshot.recoveryItems[index] = item }
+            else { state.snapshot.recoveryItems.insert(item, at: 0) }
+        }
+    }
+
+    private func executeRegisteredMutation(_ request: AtlasRequestEnvelope) async throws -> AtlasWorkerCommandResult {
+        let status: AtlasRequestStatus
+        let kind: TaskKind
+        switch request.command {
+        case let .restoreItems(_, itemIDs):
+            guard !itemIDs.isEmpty, itemIDs.count <= AtlasExecutionLimits.maximumMutationEntries,
+                  Set(itemIDs).count == itemIDs.count else { throw AtlasJournalError.invalidRequest }
+            let executor = try AtlasRecoveryExecutor(directoryURL: repository.directoryURL)
+            for id in itemIDs {
+                guard let item = state.snapshot.recoveryItems.first(where: { $0.id == id }),
+                      let operationID = item.restoreMappings?.first?.operationID else { throw AtlasJournalError.invalidRequest }
+                guard !item.isExpired(asOf: nowProvider()) else {
+                    return rejectedResult(for: request, code: .restoreExpired, reason: AtlasL10n.string("security.recovery.unverified"))
+                }
+                let result = try await executor.restore(operationID: operationID, requestID: request.id)
+                if ![.restored, .alreadyRestored].contains(result.status) {
+                    if let index = state.snapshot.recoveryItems.firstIndex(where: { $0.id == id }) {
+                        state.snapshot.recoveryItems[index].recoveryAvailability = AtlasRecoveryAvailability(rawValue: result.status.rawValue) ?? .reconciliationRequired
+                    }
+                    await persistState(context: "restore failure")
+                    return rejectedResult(for: request, code: .executionUnavailable, reason: AtlasL10n.string("security.recovery." + result.status.rawValue))
+                }
+            }
+            let records = try AtlasOperationJournal(directoryURL: repository.directoryURL).replay()
+            var latest: [UUID: AtlasOperationRecord] = [:]
+            for r in records { latest[r.operationID] = r }
+            projectOperations(Array(latest.values))
+            await persistState(context: "restore journal projection")
+            let run = TaskRun(kind: .restore, status: .completed, summary: AtlasL10n.string("security.restore.completed", itemIDs.count), startedAt: request.issuedAt, finishedAt: Date())
+            return AtlasWorkerCommandResult(request: request, response: AtlasResponseEnvelope(requestID: request.id, response: .accepted(task: .init(taskID: run.id, kind: .restore))), events: [.init(event: .taskFinished(run))], snapshot: state.snapshot)
+        case .executePlan: kind = .executePlan
+        case .fileOrganizerExecutePlan: kind = .organizeFiles
+        case .executeAppUninstall: kind = .uninstallApp
+        default: throw AtlasJournalError.invalidRequest
+        }
+        guard let selection = request.executionSelection else { return rejectedResult(for: request, code: .invalidSelection, reason: "Refresh the preview; this request has no plan proof.") }
+        if planRegistry.registeredPlan(id: selection.planID) == nil {
+            let stored = try AtlasActionPlanRegistry.readPersistedPlan(directoryURL: repository.directoryURL, id: selection.planID)
+            _ = try planRegistry.register(plan: stored.plan, operations: stored.operations, policyRevision: stored.policyRevision)
+            if organizerRoots.isEmpty {
+                organizerRoots = try stored.operations.filter { $0.kind == .organize }.map {
+                    try AtlasFileSafetyPolicy.validateOrganizerRoot(URL(fileURLWithPath: $0.sourcePath).deletingLastPathComponent())
+                }
+            }
+        }
+        let expectedKind: AtlasFileOperationKind
+        switch request.command {
+        case let .executePlan(planID): guard planID == selection.planID else { throw AtlasJournalError.invalidRequest }; expectedKind = .smartClean
+        case let .fileOrganizerExecutePlan(planID): guard planID == selection.planID else { throw AtlasJournalError.invalidRequest }; expectedKind = .organize
+        case let .executeAppUninstall(appID, planID):
+            guard planID == selection.planID, state.snapshot.apps.contains(where: { $0.id == appID }), planRegistry.registeredPlan(id: selection.planID)?.plan.items.contains(where: { $0.id == appID }) == true else { throw AtlasJournalError.invalidRequest }; expectedKind = .uninstall
+        default: throw AtlasJournalError.invalidRequest
+        }
+        let operations = try planRegistry.resolve(selection)
+        guard operations.allSatisfy({ $0.kind == expectedKind }) else { throw AtlasJournalError.invalidRequest }
+        let service = try AtlasNativeMutationService(directoryURL: repository.directoryURL, registry: planRegistry,
+            context: AtlasFilePolicyContext(organizerRoots: organizerRoots, allowedApplicationPaths: Set(state.snapshot.apps.map(\.bundlePath))))
+        status = try await service.execute(selection: selection, requestID: request.id)
+        projectOperations(status.operations)
+        let moved = status.operations.filter { $0.state == .moved }.count
+        let failed = operations.count - moved
+        let summary = AtlasL10n.string("security.execution.result", moved, failed)
+        let run = TaskRun(kind: kind, status: failed == 0 ? .completed : .failed, summary: summary, startedAt: request.issuedAt, finishedAt: Date())
+        state.snapshot.taskRuns.insert(run, at: 0)
+        await persistState(context: "journal projection")
+        return AtlasWorkerCommandResult(request: request, response: AtlasResponseEnvelope(requestID: request.id,
+            response: .accepted(task: .init(taskID: run.id, kind: kind))), events: [.init(event: .taskFinished(run))], snapshot: state.snapshot, movedCount: moved, failedCount: failed)
     }
 
     private func healthSnapshot(using request: AtlasRequestEnvelope) async throws -> AtlasWorkerCommandResult {
@@ -113,7 +263,11 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         if let healthSnapshotProvider {
             healthSnapshot = try await healthSnapshotProvider.collectHealthSnapshot()
         } else {
+            #if DEBUG
             healthSnapshot = AtlasScaffoldFixtures.healthSnapshot
+            #else
+            return rejectedResult(for: request, code: .executionUnavailable, reason: AtlasL10n.string("security.provider.unavailable"))
+            #endif
         }
 
         state.snapshot.healthSnapshot = healthSnapshot
@@ -140,6 +294,14 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         if let smartCleanScanProvider {
             do {
                 let scanResult = try await smartCleanScanProvider.collectSmartCleanScan()
+                guard scanResult.findings.count <= AtlasExecutionLimits.maximumScanEntries,
+                      scanResult.findings.allSatisfy({ $0.bytes >= 0 }) else { throw AtlasPlanRegistryError.tooManyEntries }
+                var total: Int64 = 0
+                for finding in scanResult.findings {
+                    let sum = total.addingReportingOverflow(finding.bytes)
+                    guard !sum.overflow else { throw AtlasPlanRegistryError.tooManyEntries }
+                    total = sum.partialValue
+                }
                 state.snapshot.findings = scanResult.findings
                 scanSummary = scanResult.summary
             } catch {
@@ -158,12 +320,16 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
                 )
             }
         } else {
+            #if DEBUG
             state.snapshot.findings = AtlasScaffoldFixtures.findings(language: state.settings.language)
             scanSummary = AtlasL10n.string(
                 state.snapshot.findings.count == 1 ? "infrastructure.scan.completed.one" : "infrastructure.scan.completed.other",
                 language: state.settings.language,
                 state.snapshot.findings.count
             )
+            #else
+            return rejectedResult(for: request, code: .executionUnavailable, reason: AtlasL10n.string("security.provider.unavailable"))
+            #endif
         }
         recalculateReclaimableSpace()
 
@@ -216,248 +382,22 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         )
     }
 
-    private func executePlan(using request: AtlasRequestEnvelope, planID: UUID) async -> AtlasWorkerCommandResult {
-        guard state.currentPlan.id == planID else {
-            return rejectedResult(
-                for: request,
-                code: .invalidSelection,
-                reason: "The requested Smart Clean plan is no longer current. Refresh the preview and try again."
-            )
-        }
 
-        let selectedItems = state.currentPlan.items
-        let findingsByID = Dictionary(uniqueKeysWithValues: state.snapshot.findings.map { ($0.id, $0) })
-        let missingFindingIDs = selectedItems.compactMap { item in
-            findingsByID[item.id] == nil ? item.id : nil
-        }
 
-        if !missingFindingIDs.isEmpty {
-            return rejectedResult(
-                for: request,
-                code: .invalidSelection,
-                reason: "The requested Smart Clean items are no longer available. Refresh the preview and try again."
-            )
-        }
 
-        let selectedFindings = selectedItems.compactMap { item in
-            findingsByID[item.id]
-        }
-
-        guard !selectedFindings.isEmpty else {
-            return rejectedResult(
-                for: request,
-                code: .invalidSelection,
-                reason: "The requested Smart Clean items are no longer available. Refresh the preview and try again."
-            )
-        }
-
-        let executableSelections = selectedItems.compactMap { item -> SmartCleanExecutableSelection? in
-            guard item.kind != .inspectPermission, item.kind != .reviewEvidence, let finding = findingsByID[item.id] else {
-                return nil
-            }
-            return SmartCleanExecutableSelection(
-                finding: finding,
-                targetPaths: resolvedTargetPaths(for: item, finding: finding)
-            )
-        }
-        let missingExecutableTargets = executableSelections.filter { $0.targetPaths.isEmpty }
-
-        if !missingExecutableTargets.isEmpty && !allowStateOnlyCleanExecution {
-            return rejectedResult(
-                for: request,
-                code: .executionUnavailable,
-                reason: "Smart Clean execution is unavailable because one or more plan items do not include executable cleanup targets in this build."
-            )
-        }
-        let skippedCount = selectedItems.count - executableSelections.count
-        let taskID = UUID()
-
-        let response = AtlasResponseEnvelope(
-            requestID: request.id,
-            response: .accepted(task: AtlasTaskDescriptor(taskID: taskID, kind: .executePlan))
-        )
-
-        var executionResult = SmartCleanExecutionResult()
-        if !executableSelections.isEmpty {
-            do {
-                executionResult = try await executeSmartCleanSelections(executableSelections)
-            } catch let failure as SmartCleanExecutionFailure {
-                executionResult = failure.result
-                if !allowStateOnlyCleanExecution && !executionResult.hasRecordedOutcome {
-                    return rejectedResult(
-                        for: request,
-                        code: .executionUnavailable,
-                        reason: failure.localizedDescription
-                    )
-                }
-            } catch {
-                if !allowStateOnlyCleanExecution {
-                    return rejectedResult(
-                        for: request,
-                        code: .executionUnavailable,
-                        reason: error.localizedDescription
-                    )
-                }
-            }
-        }
-
-        let executedFindings = executableSelections.map(\.finding)
-        let physicallyExecutedFindings = executedFindings.filter {
-            !(executionResult.restoreMappingsByFindingID[$0.id] ?? []).isEmpty
-        }
-        let staleFindings = executedFindings.filter { executionResult.staleFindingIDs.contains($0.id) }
-        let failedFindings = executedFindings.filter { executionResult.failedFindingIDs.contains($0.id) }
-        let recoveryItems = physicallyExecutedFindings.map {
-            makeRecoveryItem(for: $0, deletedAt: Date(), restoreMappings: executionResult.restoreMappingsByFindingID[$0.id])
-        }
-        let removedFindingIDs = Set(physicallyExecutedFindings.map(\.id)).union(staleFindings.map(\.id))
-        state.snapshot.findings.removeAll { removedFindingIDs.contains($0.id) }
-        state.snapshot.recoveryItems.insert(contentsOf: recoveryItems, at: 0)
-        recalculateReclaimableSpace()
-        state.currentPlan = makePreviewPlan(findingIDs: state.snapshot.findings.map(\.id))
-
-        let summary = smartCleanExecutionSummary(
-            executedCount: physicallyExecutedFindings.count,
-            staleCount: staleFindings.count,
-            reviewOnlyCount: skippedCount,
-            failedCount: failedFindings.count
-        )
-
-        let completedRun = TaskRun(
-            id: taskID,
-            kind: .executePlan,
-            status: failedFindings.isEmpty ? .completed : .failed,
-            summary: summary,
-            startedAt: request.issuedAt,
-            finishedAt: Date()
-        )
-        state.snapshot.taskRuns.removeAll { $0.id == taskID }
-        state.snapshot.taskRuns.insert(completedRun, at: 0)
-        await persistState(context: "execute Smart Clean plan")
-        let events = progressEvents(taskID: taskID, total: 3) + [AtlasEventEnvelope(event: .taskFinished(completedRun))]
-        if let failureReason = executionResult.failureReason {
-            await auditStore.append("Smart Clean execution recorded partial failure: \(failureReason)")
-        }
-        await auditStore.append("Executed Smart Clean plan \(planID.uuidString)")
-        return AtlasWorkerCommandResult(request: request, response: response, events: events, snapshot: state.snapshot)
-    }
-
-    private func restoreItems(using request: AtlasRequestEnvelope, taskID: UUID, itemIDs: [UUID]) async -> AtlasWorkerCommandResult {
-        let requestedItemIDs = Set(itemIDs)
-        let expiredSelectionIDs = requestedItemIDs.intersection(expiredRecoveryItemIDs())
-
-        if !expiredSelectionIDs.isEmpty {
-            await pruneExpiredRecoveryItemsIfNeeded(context: "prune expired recovery items before rejected restore")
-            return rejectedResult(
-                for: request,
-                code: .restoreExpired,
-                reason: "One or more selected recovery items have expired and can no longer be restored."
-            )
-        }
-
-        await pruneExpiredRecoveryItemsIfNeeded(context: "refresh recovery retention before restore")
-        let itemsToRestore = state.snapshot.recoveryItems.filter { requestedItemIDs.contains($0.id) }
-
-        guard !itemsToRestore.isEmpty else {
-            return rejectedResult(
-                for: request,
-                code: .invalidSelection,
-                reason: "The selected recovery item is no longer available."
-            )
-        }
-
-        do {
-            try validateRestoreItems(itemsToRestore)
-        } catch let failure as RecoveryRestoreFailure {
-            return rejectedResult(
-                for: request,
-                code: failure.code,
-                reason: failure.localizedDescription
-            )
-        } catch {
-            return rejectedResult(
-                for: request,
-                code: .executionUnavailable,
-                reason: error.localizedDescription
-            )
-        }
-
-        var physicalRestoreCount = 0
-        var atlasOnlyRestoreCount = 0
-
-        for item in itemsToRestore {
-            if let restoreMappings = item.restoreMappings, !restoreMappings.isEmpty {
-                do {
-                    try await restoreRecoveryMappings(restoreMappings)
-                    physicalRestoreCount += 1
-                } catch let failure as RecoveryRestoreFailure {
-                    return rejectedResult(
-                        for: request,
-                        code: failure.code,
-                        reason: failure.localizedDescription
-                    )
-                } catch {
-                    return rejectedResult(
-                        for: request,
-                        code: .executionUnavailable,
-                        reason: error.localizedDescription
-                    )
-                }
-            } else {
-                atlasOnlyRestoreCount += 1
-            }
-        }
-
-        for item in itemsToRestore {
-            switch item.payload {
-            case let .finding(finding):
-                if !state.snapshot.findings.contains(where: { $0.id == finding.id }) {
-                    state.snapshot.findings.insert(finding, at: 0)
-                }
-            case let .app(payload):
-                var restoredApp = payload.app
-                if payload.uninstallEvidence.reviewOnlyItemCount > 0 {
-                    restoredApp.leftoverItems = payload.uninstallEvidence.reviewOnlyItemCount
-                }
-                if !state.snapshot.apps.contains(where: { $0.id == restoredApp.id }) {
-                    state.snapshot.apps.insert(restoredApp, at: 0)
-                }
-            case .fileOrganizer:
-                // File organizer restore is handled by generic restoreMappings below
-                break
-            case nil:
-                break
-            }
-        }
-
-        state.snapshot.recoveryItems.removeAll { requestedItemIDs.contains($0.id) }
-        recalculateReclaimableSpace()
-        state.currentPlan = makePreviewPlan(findingIDs: state.snapshot.findings.map(\.id))
-
-        let completedRun = TaskRun(
-            id: taskID,
-            kind: .restore,
-            status: .completed,
-            summary: restoreSummary(physicalRestoreCount: physicalRestoreCount, atlasOnlyRestoreCount: atlasOnlyRestoreCount),
-            startedAt: request.issuedAt,
-            finishedAt: Date()
-        )
-        state.snapshot.taskRuns.removeAll { $0.id == taskID }
-        state.snapshot.taskRuns.insert(completedRun, at: 0)
-        await persistState(context: "restore recovery items")
-        let response = AtlasResponseEnvelope(
-            requestID: request.id,
-            response: .accepted(task: AtlasTaskDescriptor(taskID: taskID, kind: .restore))
-        )
-        let events = progressEvents(taskID: taskID, total: 2) + [AtlasEventEnvelope(event: .taskFinished(completedRun))]
-        await auditStore.append("Restored \(itemsToRestore.count) item(s) for task \(taskID.uuidString)")
-        return AtlasWorkerCommandResult(request: request, response: response, events: events, snapshot: state.snapshot)
-    }
 
     private func listApps(using request: AtlasRequestEnvelope) async -> AtlasWorkerCommandResult {
-        if let appsInventoryProvider, let apps = try? await appsInventoryProvider.collectInstalledApps(), !apps.isEmpty {
-            state.snapshot.apps = apps
-            await persistState(context: "refresh app inventory")
+        if let appsInventoryProvider {
+            do {
+                let apps = try await appsInventoryProvider.collectInstalledApps()
+                guard apps.count <= AtlasExecutionLimits.maximumScanEntries else { throw AtlasPlanRegistryError.tooManyEntries }
+                state.snapshot.apps = apps
+                await persistState(context: "refresh app inventory")
+            } catch { return rejectedResult(for: request, code: .executionUnavailable, reason: error.localizedDescription) }
+        } else {
+            #if !DEBUG
+            return rejectedResult(for: request, code: .executionUnavailable, reason: AtlasL10n.string("security.provider.unavailable"))
+            #endif
         }
 
         let apps = state.snapshot.apps.sorted { lhs, rhs in
@@ -492,119 +432,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         )
     }
 
-    private func executeAppUninstall(using request: AtlasRequestEnvelope, appID: UUID, planID: UUID?) async -> AtlasWorkerCommandResult {
-        guard let app = state.snapshot.apps.first(where: { $0.id == appID }) else {
-            return rejectedResult(
-                for: request,
-                code: .invalidSelection,
-                reason: "The selected app is no longer available to uninstall."
-            )
-        }
 
-        let uninstallEvidence: AtlasAppUninstallEvidence
-        var matchedSnapshot: AtlasAppUninstallEvidenceSnapshot?
-        var evidenceDivergenceAtExecution = false
-
-        if let planID, let snapshot = pendingAppUninstallSnapshots[planID] {
-            // Snapshot found: verify fingerprint integrity
-            let currentSnapshot = appUninstallEvidenceAnalyzer.analyzeSnapshot(
-                planID: planID,
-                appName: app.name,
-                bundleIdentifier: app.bundleIdentifier,
-                bundlePath: app.bundlePath,
-                bundleBytes: app.bytes
-            )
-
-            if currentSnapshot.fingerprintHash != snapshot.fingerprintHash {
-                evidenceDivergenceAtExecution = true
-                await auditStore.append("Evidence divergence detected for \(app.name): fingerprint mismatch")
-            }
-
-            // Convert snapshot groups back to legacy evidence format for recovery item creation
-            let legacyGroups = snapshot.reviewOnlyGroups.compactMap { group -> AtlasAppFootprintEvidenceGroup? in
-                // Map AtlasAppEvidenceCategory to AtlasAppFootprintEvidenceCategory where possible
-                guard let legacyCategory = AtlasAppFootprintEvidenceCategory(rawValue: group.category.rawValue) else {
-                    return nil
-                }
-                return AtlasAppFootprintEvidenceGroup(
-                    category: legacyCategory,
-                    items: group.items.map { AtlasAppFootprintEvidenceItem(path: $0.path, bytes: $0.bytes) }
-                )
-            }
-            uninstallEvidence = AtlasAppUninstallEvidence(
-                bundlePath: app.bundlePath,
-                bundleBytes: app.bytes,
-                reviewOnlyGroups: legacyGroups
-            )
-            matchedSnapshot = snapshot
-
-            // Remove snapshot from pending map after use
-            pendingAppUninstallSnapshots.removeValue(forKey: planID)
-        } else {
-            // No snapshot found (nil planID or worker restarted): fall back to re-running analyzer
-            uninstallEvidence = appUninstallEvidenceAnalyzer.analyze(
-                appName: app.name,
-                bundleIdentifier: app.bundleIdentifier,
-                bundlePath: app.bundlePath,
-                bundleBytes: app.bytes
-            )
-            if let planID {
-                await auditStore.append("No pending snapshot found for plan \(planID.uuidString), falling back to fresh analysis for \(app.name)")
-            }
-        }
-
-        var appRestoreMappings: [RecoveryPathMapping]?
-        if !app.bundlePath.isEmpty, FileManager.default.fileExists(atPath: app.bundlePath) {
-            guard let helperExecutor else {
-                return rejectedResult(
-                    for: request,
-                    code: .helperUnavailable,
-                    reason: "Bundled helper unavailable for app uninstall. Build or package the helper and try again."
-                )
-            }
-
-            do {
-                let result = try await helperExecutor.perform(
-                    AtlasHelperAction(kind: .trashItems, targetPath: app.bundlePath)
-                )
-                guard result.success else {
-                    return rejectedResult(for: request, code: .helperUnavailable, reason: result.message)
-                }
-                if let trashedPath = result.resolvedPath {
-                    appRestoreMappings = [RecoveryPathMapping(originalPath: app.bundlePath, trashedPath: trashedPath)]
-                }
-            } catch {
-                return rejectedResult(for: request, code: .helperUnavailable, reason: error.localizedDescription)
-            }
-        }
-
-        let taskID = UUID()
-        state.snapshot.apps.removeAll { $0.id == appID }
-        state.snapshot.recoveryItems.insert(
-            makeRecoveryItem(for: app, uninstallEvidence: uninstallEvidence, uninstallSnapshot: matchedSnapshot, evidenceDivergenceAtExecution: evidenceDivergenceAtExecution, deletedAt: Date(), restoreMappings: appRestoreMappings),
-            at: 0
-        )
-
-        let completedRun = TaskRun(
-            id: taskID,
-            kind: .uninstallApp,
-            status: .completed,
-            summary: appUninstallSummary(for: app, uninstallEvidence: uninstallEvidence),
-            startedAt: request.issuedAt,
-            finishedAt: Date()
-        )
-        state.snapshot.taskRuns.removeAll { $0.id == taskID }
-        state.snapshot.taskRuns.insert(completedRun, at: 0)
-        await persistState(context: "execute app uninstall")
-
-        let response = AtlasResponseEnvelope(
-            requestID: request.id,
-            response: .accepted(task: AtlasTaskDescriptor(taskID: taskID, kind: .uninstallApp))
-        )
-        let events = progressEvents(taskID: taskID, total: 3) + [AtlasEventEnvelope(event: .taskFinished(completedRun))]
-        await auditStore.append("Executed uninstall preview for \(app.name)")
-        return AtlasWorkerCommandResult(request: request, response: response, events: events, snapshot: state.snapshot)
-    }
 
     private func settingsGet(using request: AtlasRequestEnvelope) async -> AtlasWorkerCommandResult {
         let response = AtlasResponseEnvelope(requestID: request.id, response: .settings(state.settings))
@@ -622,6 +450,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
     // MARK: - File Organizer
 
     private func fileOrganizerScan(using request: AtlasRequestEnvelope, taskID: UUID, folderPaths: [String]) async -> AtlasWorkerCommandResult {
+        organizerPreviews.removeAll()
         let entries: [FileOrganizerEntry]
         organizerRoots = folderPaths.compactMap { raw in
             guard let url = try? AtlasFileSafetyPolicy.expanded(raw, homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser) else { return nil }
@@ -640,9 +469,22 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
                 )
             }
         } else {
+            #if DEBUG
             entries = AtlasScaffoldFixtures.fileOrganizerEntries(language: state.settings.language)
+            #else
+            return rejectedResult(for: request, code: .executionUnavailable, reason: AtlasL10n.string("security.provider.unavailable"))
+            #endif
         }
 
+        guard entries.count <= AtlasExecutionLimits.maximumScanEntries else {
+            return rejectedResult(for: request, code: .invalidSelection, reason: "Scan exceeds the candidate limit")
+        }
+        var total: Int64 = 0
+        for entry in entries {
+            let sum = total.addingReportingOverflow(entry.bytes)
+            guard entry.bytes >= 0, !sum.overflow else { return rejectedResult(for: request, code: .invalidSelection, reason: "Scan byte total exceeds the limit") }
+            total = sum.partialValue
+        }
         state.snapshot.fileOrganizerEntries = entries
         await persistState(context: "file organizer scan")
 
@@ -726,6 +568,9 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         }
 
         let plan = registeredPreview(makeFileOrganizerPlan(from: entries), kind: .organize)
+        // Bound the presentation cache to the current scan's most recent previews.
+        if organizerPreviews.count >= 16 { organizerPreviews.removeAll() }
+        organizerPreviews[plan.id] = plan
         let response = AtlasResponseEnvelope(requestID: request.id, response: .fileOrganizerPlan(plan))
         await auditStore.append("Prepared file organizer plan \(plan.id.uuidString)")
         return AtlasWorkerCommandResult(
@@ -736,180 +581,10 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         )
     }
 
-    private func fileOrganizerExecutePlan(using request: AtlasRequestEnvelope, planID: UUID) async -> AtlasWorkerCommandResult {
-        let entries = state.snapshot.fileOrganizerEntries
-        guard !entries.isEmpty else {
-            return rejectedResult(
-                for: request,
-                code: .invalidSelection,
-                reason: AtlasL10n.string("fileorganizer.error.noEntries")
-            )
-        }
 
-        let plan = makeFileOrganizerPlan(from: entries)
-        guard plan.id == planID else {
-            return rejectedResult(
-                for: request,
-                code: .invalidSelection,
-                reason: AtlasL10n.string("fileorganizer.error.stalePlan")
-            )
-        }
-
-        let taskID = UUID()
-        var moveMappings: [FileOrganizerMoveMapping] = []
-        var absoluteDestPaths: [String] = []  // parallel array: absolute paths for restore mappings
-        var totalBytesMoved: Int64 = 0
-        var failedMoves: [(String, String)] = []
-
-        let fm = FileManager.default
-        let homeDir = fm.homeDirectoryForCurrentUser.path
-
-        // Track used destination paths to detect cross-source filename collisions
-        var usedDestPaths: [String: Int] = [:]
-
-        for entry in entries {
-            let rawSourcePath = (entry.path as NSString).expandingTildeInPath
-            let rawDestPath = (entry.proposedDestination as NSString).expandingTildeInPath
-
-            let sourceURL: URL
-            let destURL: URL
-            do {
-                sourceURL = try AtlasPathValidator.validate(rawSourcePath)
-                destURL = try AtlasPathValidator.validate(rawDestPath)
-            } catch {
-                await auditStore.append("Skipped invalid path for \(entry.fileName): \(error.localizedDescription)")
-                failedMoves.append((entry.fileName, "Invalid path: \(error.localizedDescription)"))
-                continue
-            }
-            let sourcePath = sourceURL.path
-            let proposedDestPath = destURL.path
-
-            guard fm.fileExists(atPath: sourcePath) else {
-                await auditStore.append("Source no longer exists: \(entry.fileName)")
-                failedMoves.append((entry.fileName, "Source file no longer exists"))
-                continue
-            }
-
-            // Resolve destination: handle in-memory duplicates + on-disk conflicts
-            let claimIndex = usedDestPaths[proposedDestPath, default: 0]
-            usedDestPaths[proposedDestPath] = claimIndex + 1
-
-            var destPath = proposedDestPath
-            if claimIndex > 0 || fm.fileExists(atPath: destPath) {
-                let ext = (proposedDestPath as NSString).pathExtension
-                let baseName = (proposedDestPath as NSString).deletingPathExtension
-                var attempt = claimIndex > 0 ? claimIndex : 1
-                var candidate = ext.isEmpty
-                    ? "\(baseName) (\(attempt))"
-                    : "\(baseName) (\(attempt)).\(ext)"
-                while fm.fileExists(atPath: candidate) {
-                    attempt += 1
-                    candidate = ext.isEmpty
-                        ? "\(baseName) (\(attempt))"
-                        : "\(baseName) (\(attempt)).\(ext)"
-                }
-                destPath = candidate
-            }
-
-            // Security boundary (audit #22): FileOrganizer destinations are
-            // confined to the user's home. A traversing subfolder or a base
-            // path configured outside home must never move a file into
-            // /Applications, /Library, or anywhere else. Reject (don't write).
-            guard destPath == homeDir || destPath.hasPrefix(homeDir + "/") else {
-                await auditStore.append("Rejected FileOrganizer destination outside home for \(entry.fileName): \(destPath)")
-                failedMoves.append((entry.fileName, "Destination is outside the home directory"))
-                continue
-            }
-            do {
-                let intent = AtlasFileOperationIntent(entryID: entry.id, kind: .organize, sourcePath: sourcePath, destinationPath: destPath, expectedIdentity: try AtlasFileIdentityReader.read(sourceURL))
-                let operation = try AtlasFileSafetyPolicy.validate(intent, context: AtlasFilePolicyContext(organizerRoots: organizerRoots))
-                _ = try AtlasFileMover.moveWithoutReplacing(operation)
-                // Map display path back from resolved destPath. Separator
-                // boundary (audit #2): match scanner's homeDir + "/" convention.
-                let resolvedDisplay: String
-                if destPath == homeDir || destPath.hasPrefix(homeDir + "/") {
-                    resolvedDisplay = "~" + String(destPath.dropFirst(homeDir.count))
-                } else {
-                    resolvedDisplay = destPath
-                }
-                moveMappings.append(FileOrganizerMoveMapping(originalPath: entry.path, destinationPath: resolvedDisplay))
-                absoluteDestPaths.append(destPath)
-                totalBytesMoved += entry.bytes
-            } catch {
-                await auditStore.append("Failed to move \(entry.fileName): \(error.localizedDescription)")
-                failedMoves.append((entry.fileName, error.localizedDescription))
-            }
-        }
-
-        if !failedMoves.isEmpty {
-            await auditStore.append("File organizer partial failure: \(failedMoves.count)/\(entries.count) files failed")
-        }
-
-        if !moveMappings.isEmpty {
-            // Source folder (audit #10): the directory being organized, not a
-            // single file path.
-            let sourceFolder = (entries.first?.path).map { ($0 as NSString).deletingLastPathComponent } ?? "~/Desktop"
-            let newRestoreMappings = zip(moveMappings, absoluteDestPaths).map { mapping, absoluteDest in
-                RecoveryPathMapping(originalPath: (mapping.originalPath as NSString).expandingTildeInPath, trashedPath: absoluteDest)
-            }
-            let recoveryItem = RecoveryItem(
-                title: AtlasL10n.string("fileorganizer.recovery.title"),
-                detail: AtlasL10n.string("fileorganizer.recovery.detail"),
-                originalPath: sourceFolder,
-                bytes: totalBytesMoved,
-                deletedAt: Date(),
-                expiresAt: Date().addingTimeInterval(30 * 24 * 3600),
-                payload: .fileOrganizer(FileOrganizerRecoveryPayload(
-                    moveMappings: moveMappings,
-                    sourceFolder: sourceFolder
-                )),
-                restoreMappings: newRestoreMappings
-            )
-            state.snapshot.recoveryItems.insert(recoveryItem, at: 0)
-        }
-
-        // Keep unmoved entries for retry; clear only on full success (audit
-        // #8). Previously full failure also cleared entries, leaving nothing to
-        // retry while the UI reported success.
-        let movedIDs = Set(moveMappings.compactMap { mapping -> UUID? in
-            entries.first(where: { $0.path == mapping.originalPath })?.id
-        })
-        if failedMoves.isEmpty {
-            state.snapshot.fileOrganizerEntries = []
-        } else {
-            state.snapshot.fileOrganizerEntries = entries.filter { !movedIDs.contains($0.id) }
-        }
-        await persistState(context: "file organizer execute plan")
-
-        let allFailed = !failedMoves.isEmpty && moveMappings.isEmpty
-        let completedRun = TaskRun(
-            id: taskID,
-            kind: .organizeFiles,
-            status: allFailed ? .failed : .completed,
-            summary: AtlasL10n.string(
-                moveMappings.count == 1 ? "infrastructure.scan.completed.one" : "infrastructure.scan.completed.other",
-                moveMappings.count
-            ),
-            startedAt: request.issuedAt,
-            finishedAt: Date()
-        )
-        state.snapshot.taskRuns.removeAll { $0.id == taskID }
-        state.snapshot.taskRuns.insert(completedRun, at: 0)
-        await persistState(context: "file organizer execute complete")
-
-        let response = AtlasResponseEnvelope(
-            requestID: request.id,
-            response: .accepted(task: AtlasTaskDescriptor(taskID: taskID, kind: .organizeFiles))
-        )
-        let events = progressEvents(taskID: taskID, total: 3) + [AtlasEventEnvelope(event: .taskFinished(completedRun))]
-        await auditStore.append("Executed file organizer plan: \(moveMappings.count) moved, \(failedMoves.count) failed")
-        return AtlasWorkerCommandResult(request: request, response: response, events: events, snapshot: state.snapshot, movedCount: moveMappings.count, failedCount: failedMoves.count)
-    }
 
     private func fileOrganizerDryRun(using request: AtlasRequestEnvelope, planID: UUID) async -> AtlasWorkerCommandResult {
-        let entries = state.snapshot.fileOrganizerEntries
-        let plan = makeFileOrganizerPlan(from: entries)
-        guard plan.id == planID else {
+        guard let plan = organizerPreviews[planID] else {
             return rejectedResult(
                 for: request,
                 code: .invalidSelection,
@@ -937,6 +612,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
     }
 
     private func registeredPreview(_ plan: ActionPlan, kind: AtlasFileOperationKind) -> ActionPlan {
+        var plan = plan
         guard plan.items.count <= AtlasExecutionLimits.maximumScanEntries else { return plan }
         let home = FileManager.default.homeDirectoryForCurrentUser
         let context = AtlasFilePolicyContext(homeDirectoryURL: home, organizerRoots: organizerRoots,
@@ -949,7 +625,7 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
                     let url = try AtlasFileSafetyPolicy.expanded(path, homeDirectoryURL: home)
                     let identity = try AtlasFileIdentityReader.read(url)
                     let destination = kind == .organize ? state.snapshot.fileOrganizerEntries.first { $0.id == item.id }?.proposedDestination : nil
-                    let id = UUID()
+                    let id = contentID(Data((item.id.uuidString + "\0" + url.path).utf8))
                     let intent = AtlasFileOperationIntent(entryID: id, kind: kind, sourcePath: url.path,
                         destinationPath: try destination.map { try AtlasFileSafetyPolicy.expanded($0, homeDirectoryURL: home).path }, expectedIdentity: identity)
                     _ = try AtlasFileSafetyPolicy.validate(intent, context: context)
@@ -957,7 +633,13 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
                 } catch { return plan } // Preview remains review-only when any target lacks proof.
             }
         }
+        plan.id = contentID(Data(AtlasActionPlanRegistry.digest(operations, policyRevision: 1).utf8))
         return (try? planRegistry.register(plan: plan, operations: operations, policyRevision: 1).plan) ?? plan
+    }
+
+    private func contentID(_ data: Data) -> UUID {
+        let b = Array(SHA256.hash(data: data).prefix(16))
+        return UUID(uuid: (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]))
     }
 
     private func makeFileOrganizerPlan(from entries: [FileOrganizerEntry]) -> ActionPlan {
@@ -997,20 +679,9 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         )
     }
 
-    private func validateRestoreItems(_ items: [RecoveryItem]) throws {
-        for item in items {
-            guard let restoreMappings = item.restoreMappings, !restoreMappings.isEmpty else {
-                continue
-            }
-            try validateRestoreMappings(restoreMappings)
-        }
-    }
 
-    private func validateRestoreMappings(_ restoreMappings: [RecoveryPathMapping]) throws {
-        for mapping in restoreMappings {
-            try validateRestoreTarget(mapping)
-        }
-    }
+
+
 
     private func expiredRecoveryItemIDs(asOf now: Date? = nil) -> Set<UUID> {
         let cutoff = now ?? nowProvider()
@@ -1020,26 +691,15 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
     }
 
     private func pruneExpiredRecoveryItemsIfNeeded(context: String, now: Date? = nil) async {
-        let cutoff = now ?? nowProvider()
-        let expiredIDs = expiredRecoveryItemIDs(asOf: cutoff)
-        guard !expiredIDs.isEmpty else {
-            return
-        }
-
-        state.snapshot.recoveryItems.removeAll { expiredIDs.contains($0.id) }
-        await persistState(context: context)
-        await auditStore.append("Pruned \(expiredIDs.count) expired recovery item(s)")
+        // Retention never removes operation evidence or its physical source.
     }
 
     private func persistState(context: String) async {
-        do {
-            _ = try repository.saveState(state)
-        } catch {
-            await auditStore.append("Failed to persist state after \(context): \(error.localizedDescription)")
-            let message = "[AtlasScaffoldWorkerService] Failed to persist state after \(context): \(error.localizedDescription)\n"
-            if let data = message.data(using: .utf8) {
-                try? FileHandle.standardError.write(contentsOf: data)
-            }
+        guard persistenceFailure == nil else { return }
+        do { _ = try repository.saveState(state) }
+        catch {
+            persistenceFailure = "State save failed; writes are disabled: " + error.localizedDescription
+            await auditStore.append("\(context): \(persistenceFailure!)")
         }
     }
 
@@ -1053,131 +713,21 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         }
     }
 
-    private func executeSmartCleanSelections(_ selections: [SmartCleanExecutableSelection]) async throws -> SmartCleanExecutionResult {
-        var result = SmartCleanExecutionResult()
-        for selection in selections {
-            let targetPaths = Array(Set(selection.targetPaths)).sorted()
-            guard !targetPaths.isEmpty else {
-                result.failedFindingIDs.insert(selection.finding.id)
-                result.failureReason = result.failureReason ?? "Smart Clean finding is missing executable targets."
-                throw SmartCleanExecutionFailure(result: result)
-            }
-            do {
-                let preparedTargetPaths = try prepareSmartCleanTargetPaths(targetPaths)
-                var mappings: [RecoveryPathMapping] = []
-                for targetPath in preparedTargetPaths {
-                    if let mapping = try await trashSmartCleanTarget(at: targetPath) {
-                        mappings.append(mapping)
-                        result.restoreMappingsByFindingID[selection.finding.id] = mappings
-                    }
-                }
-                if mappings.isEmpty {
-                    result.staleFindingIDs.insert(selection.finding.id)
-                } else {
-                    result.restoreMappingsByFindingID[selection.finding.id] = mappings
-                }
-            } catch {
-                result.failedFindingIDs.insert(selection.finding.id)
-                result.failureReason = result.failureReason ?? error.localizedDescription
-                throw SmartCleanExecutionFailure(result: result)
-            }
-        }
-        return result
-    }
+
 
     private func resolvedTargetPaths(for item: ActionItem, finding: Finding) -> [String] {
         Array(Set(item.targetPaths ?? finding.targetPaths ?? [])).sorted()
     }
 
-    private func prepareSmartCleanTargetPaths(_ targetPaths: [String]) throws -> [String] {
-        let validatedURLs = try AtlasPathValidator.validateAll(targetPaths)
-        var preparedTargetPaths: [String] = []
-        for targetURL in validatedURLs {
-            guard FileManager.default.fileExists(atPath: targetURL.path) else {
-                continue
-            }
-            if shouldUseHelperForSmartCleanTarget(targetURL) {
-                guard helperExecutor != nil else {
-                    throw AtlasWorkspaceRepositoryError.writeFailed("Bundled helper unavailable for Smart Clean target: \(targetURL.path)")
-                }
-            } else if !isDirectlyTrashableSmartCleanTarget(targetURL) {
-                throw AtlasWorkspaceRepositoryError.writeFailed("Smart Clean target is outside the supported execution allowlist: \(targetURL.path)")
-            }
-            preparedTargetPaths.append(targetURL.path)
-        }
-        return preparedTargetPaths
-    }
 
-    private func trashSmartCleanTarget(at targetPath: String) async throws -> RecoveryPathMapping? {
-        let targetURL = URL(fileURLWithPath: targetPath).resolvingSymlinksInPath()
-        guard FileManager.default.fileExists(atPath: targetURL.path) else {
-            return nil
-        }
 
-        if shouldUseHelperForSmartCleanTarget(targetURL) {
-            guard let helperExecutor else {
-                throw AtlasWorkspaceRepositoryError.writeFailed("Bundled helper unavailable for Smart Clean target: \(targetURL.path)")
-            }
-            let result = try await helperExecutor.perform(AtlasHelperAction(kind: .trashItems, targetPath: targetURL.path))
-            guard result.success else {
-                throw AtlasWorkspaceRepositoryError.writeFailed(result.message)
-            }
-            guard let trashedPath = result.resolvedPath else {
-                throw AtlasWorkspaceRepositoryError.writeFailed("Smart Clean target was trashed but no recovery path was returned.")
-            }
-            return RecoveryPathMapping(originalPath: targetURL.path, trashedPath: trashedPath)
-        }
 
-        guard isDirectlyTrashableSmartCleanTarget(targetURL) else {
-            throw AtlasWorkspaceRepositoryError.writeFailed("Smart Clean target is outside the supported execution allowlist: \(targetURL.path)")
-        }
 
-        var trashedURL: NSURL?
-        try FileManager.default.trashItem(at: targetURL, resultingItemURL: &trashedURL)
-        guard let trashedPath = (trashedURL as URL?)?.path else {
-            throw AtlasWorkspaceRepositoryError.writeFailed("Smart Clean target was trashed but no recovery path was returned.")
-        }
-        return RecoveryPathMapping(originalPath: targetURL.path, trashedPath: trashedPath)
-    }
 
-    private func restoreRecoveryMappings(_ restoreMappings: [RecoveryPathMapping]) async throws {
-        for mapping in restoreMappings {
-            try await restoreRecoveryTarget(mapping)
-        }
-    }
 
-    private func validateRestoreTarget(_ mapping: RecoveryPathMapping) throws {
-        let sourceURL = URL(fileURLWithPath: mapping.trashedPath).resolvingSymlinksInPath()
-        let destinationURL = URL(fileURLWithPath: mapping.originalPath).resolvingSymlinksInPath()
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: sourceURL.path) else {
-            throw RecoveryRestoreFailure.executionUnavailable("Recovery source is no longer available on disk: \(sourceURL.path)")
-        }
-        if shouldUseHelperForSmartCleanTarget(destinationURL) {
-            guard helperExecutor != nil else {
-                throw RecoveryRestoreFailure.helperUnavailable("Bundled helper unavailable for recovery target: \(destinationURL.path)")
-            }
-        } else if isDirectlyTrashableSmartCleanTarget(destinationURL) {
-            // SmartClean cache paths are valid restore targets
-        } else if isFileOrganizerRestoreTarget(mapping) {
-            // File organizer targets within home directory are valid restore targets
-        } else {
-            throw RecoveryRestoreFailure.executionUnavailable("Recovery target is outside the supported execution allowlist: \(destinationURL.path)")
-        }
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            throw RecoveryRestoreFailure.restoreConflict("Recovery target already exists: \(destinationURL.path)")
-        }
-    }
 
-    private func restoreRecoveryTarget(_ mapping: RecoveryPathMapping) async throws {
-        try validateRestoreTarget(mapping)
-        let source = try AtlasFileSafetyPolicy.expanded(mapping.trashedPath, homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser)
-        let destination = try AtlasFileSafetyPolicy.expanded(mapping.originalPath, homeDirectoryURL: FileManager.default.homeDirectoryForCurrentUser)
-        let intent = AtlasFileOperationIntent(entryID: UUID(), kind: .restore, sourcePath: source.path,
-            destinationPath: destination.path, expectedIdentity: try AtlasFileIdentityReader.read(source))
-        let context = AtlasFilePolicyContext(recoveryMappings: [source.path: destination.path])
-        _ = try AtlasFileMover.moveWithoutReplacing(AtlasFileSafetyPolicy.validate(intent, context: context))
-    }
+
+
 
     private func recoveryRestoreFailure(fromHelperMessage message: String) -> RecoveryRestoreFailure {
         if message.hasPrefix("Restore destination already exists:") {
@@ -1186,20 +736,11 @@ public actor AtlasScaffoldWorkerService: AtlasWorkerServing {
         return .executionUnavailable(message)
     }
 
-    private func shouldUseHelperForSmartCleanTarget(_ targetURL: URL) -> Bool {
-        AtlasSmartCleanExecutionSupport.requiresHelper(for: targetURL)
-    }
 
-    private func isDirectlyTrashableSmartCleanTarget(_ targetURL: URL) -> Bool {
-        AtlasSmartCleanExecutionSupport.isDirectlyTrashable(targetURL)
-    }
 
-    private func isFileOrganizerRestoreTarget(_ mapping: RecoveryPathMapping) -> Bool {
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
-        let originalPath = (mapping.originalPath as NSString).expandingTildeInPath
-        let trashedPath = (mapping.trashedPath as NSString).expandingTildeInPath
-        return originalPath.hasPrefix(homeDir + "/") && trashedPath.hasPrefix(homeDir + "/")
-    }
+
+
+
 
     private func smartCleanExecutionSummary(executedCount: Int, staleCount: Int, reviewOnlyCount: Int, failedCount: Int) -> String {
         var clauses: [String] = []

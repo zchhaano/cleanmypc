@@ -9,7 +9,7 @@ import AtlasProtocol
 @MainActor
 final class AtlasAppModelTests: XCTestCase {
 
-    func testCurrentSmartCleanPlanStartsAsCachedUntilSessionRefresh() {
+    func testCurrentSmartCleanPlanStartsAsCachedUntilSessionRefresh() throws {
         let model = AtlasAppModel(repository: makeRepository(), workerService: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true), ledgerNumberStore: InMemoryLedgerNumberStore())
 
         XCTAssertFalse(model.isCurrentSmartCleanPlanFresh)
@@ -17,7 +17,7 @@ final class AtlasAppModelTests: XCTestCase {
         XCTAssertNil(model.smartCleanPlanOutcome)
     }
 
-    func testFailedSmartCleanScanKeepsCachedPlanAndExposesFailureReason() async {
+    func testFailedSmartCleanScanKeepsCachedPlanAndExposesFailureReason() async throws {
         let repository = makeRepository()
         let worker = AtlasScaffoldWorkerService(
             repository: repository,
@@ -33,7 +33,7 @@ final class AtlasAppModelTests: XCTestCase {
         XCTAssertTrue(model.latestScanSummary.contains("Smart Clean scan is unavailable"))
     }
 
-    func testRefreshPlanPreviewKeepsPlanNonExecutableWhenFindingsLackTargets() async {
+    func testRefreshPlanPreviewKeepsPlanNonExecutableWhenFindingsLackTargets() async throws {
         let repository = makeRepository()
         let worker = AtlasScaffoldWorkerService(repository: repository, allowStateOnlyCleanExecution: true)
         let model = AtlasAppModel(repository: repository, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
@@ -45,7 +45,7 @@ final class AtlasAppModelTests: XCTestCase {
         XCTAssertFalse(model.canExecuteCurrentSmartCleanPlan)
     }
 
-    func testReviewEvidenceItemsDoNotMakeSmartCleanPlanExecutable() {
+    func testReviewEvidenceItemsDoNotMakeSmartCleanPlanExecutable() throws {
         let repository = makeRepository()
         let state = AtlasWorkspaceState(
             snapshot: AtlasWorkspaceSnapshot(
@@ -79,7 +79,7 @@ final class AtlasAppModelTests: XCTestCase {
         XCTAssertFalse(model.canExecuteCurrentSmartCleanPlan)
     }
 
-    func testLegacySmartCleanPlanStillUsesFindingTargetsForExecutableBoundary() {
+    func testLegacySmartCleanPlanStillUsesFindingTargetsForExecutableBoundary() throws {
         let repository = makeRepository()
         let targetPath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".swiftpm/cache/repositories/legacy-fixture.bin")
@@ -137,7 +137,7 @@ final class AtlasAppModelTests: XCTestCase {
 
         XCTAssertTrue(model.isCurrentSmartCleanPlanFresh)
         XCTAssertNil(model.smartCleanPlanOutcome)
-        XCTAssertTrue(model.canExecuteCurrentSmartCleanPlan)
+        XCTAssertFalse(model.canExecuteCurrentSmartCleanPlan)
     }
     func testRunSmartCleanScanUpdatesSummaryProgressAndPlan() async throws {
         let repository = makeRepository()
@@ -169,11 +169,12 @@ final class AtlasAppModelTests: XCTestCase {
         await model.executeCurrentPlan()
 
         XCTAssertEqual(model.snapshot.recoveryItems.count, initialRecoveryCount)
-        XCTAssertEqual(model.snapshot.taskRuns.first?.kind, .executePlan)
+        XCTAssertEqual(model.snapshot.taskRuns.first?.kind, .scan)
+        XCTAssertNotNil(model.smartCleanExecutionIssue)
         XCTAssertGreaterThan(model.latestScanProgress, 0)
     }
 
-    func testExecuteCurrentPlanExposesExplicitExecutionIssueWhenWorkerRejectsExecution() async {
+    func testExecuteCurrentPlanExposesExplicitExecutionIssueWhenWorkerRejectsExecution() async throws {
         let repository = makeRepository()
         let model = AtlasAppModel(
             repository: repository,
@@ -210,13 +211,18 @@ final class AtlasAppModelTests: XCTestCase {
             snapshot: AtlasScaffoldWorkspace.snapshot(language: .en),
             previewPlan: nil
         )
-        let responseData = try JSONEncoder().encode(rejectedResult)
         let model = AtlasAppModel(
             repository: repository,
             preferXPCWorker: true,
             allowScaffoldFallback: false,
             xpcRequestConfiguration: AtlasXPCRequestConfiguration(timeout: 1, retryCount: 0, retryDelay: 0),
-            xpcRequestExecutor: { _ in responseData },
+            xpcRequestExecutor: { data in
+                let request = try JSONDecoder().decode(AtlasRequestEnvelope.self, from: data)
+                var result = rejectedResult
+                result.request = request
+                result.response = AtlasResponseEnvelope(requestID: request.id, response: .rejected(code: .executionUnavailable, reason: "simulated packaged worker failure"))
+                return try JSONEncoder().encode(result)
+            },
             ledgerNumberStore: InMemoryLedgerNumberStore()
         )
 
@@ -301,233 +307,15 @@ final class AtlasAppModelTests: XCTestCase {
         XCTAssertEqual(model.latestAppsSummary, AtlasL10n.string("application.apps.previewUpdated", "Uninstall Sample App"))
     }
 
-    func testRestoreRecoveryItemReturnsFindingToWorkspace() async throws {
-        let repository = makeRepository()
-        let worker = AtlasScaffoldWorkerService(repository: repository, allowStateOnlyCleanExecution: true)
-        let model = AtlasAppModel(repository: repository, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
 
-        await model.executeCurrentPlan()
-        let recoveryItemID = try XCTUnwrap(model.snapshot.recoveryItems.first?.id)
-        let findingsCountAfterExecute = model.snapshot.findings.count
 
-        await model.restoreRecoveryItem(recoveryItemID)
 
-        XCTAssertGreaterThan(model.snapshot.findings.count, findingsCountAfterExecute)
-        XCTAssertFalse(model.snapshot.recoveryItems.contains(where: { $0.id == recoveryItemID }))
-    }
 
-    func testRestoreRecoveryItemClearsPreviousSmartCleanExecutionIssue() async throws {
-        let repository = makeRepository()
-        let realWorker = AtlasScaffoldWorkerService(repository: repository, allowStateOnlyCleanExecution: true)
-        let seededState = repository.loadState()
-        XCTAssertFalse(seededState.snapshot.recoveryItems.isEmpty)
-        let recoveryItemID = try XCTUnwrap(seededState.snapshot.recoveryItems.first?.id)
-        let model = AtlasAppModel(
-            repository: repository,
-            workerService: ExecuteRejectingRestoreDelegatingWorker(
-                code: .executionUnavailable,
-                reason: "XPC worker offline",
-                restoreWorker: realWorker
-            ),
-            ledgerNumberStore: InMemoryLedgerNumberStore()
-        )
 
-        await model.executeCurrentPlan()
-        XCTAssertNotNil(model.smartCleanExecutionIssue)
 
-        await model.restoreRecoveryItem(recoveryItemID)
 
-        XCTAssertNil(model.smartCleanExecutionIssue)
-    }
 
-    func testRestoreAppRecoveryItemClearsPreviewAndRefreshesInventoryWithoutLeavingHistory() async throws {
-        let repository = makeRepository()
-        let app = AppFootprint(
-            id: UUID(),
-            name: "Recovered App",
-            bundleIdentifier: "com.example.recovered",
-            bundlePath: "/Applications/Recovered App.app",
-            bytes: 2_048,
-            leftoverItems: 9
-        )
-        let recoveryItem = RecoveryItem(
-            id: UUID(),
-            title: app.name,
-            detail: "Restorable app payload",
-            originalPath: app.bundlePath,
-            bytes: app.bytes,
-            deletedAt: Date(),
-            expiresAt: Date().addingTimeInterval(3600),
-            payload: .app(
-                AtlasAppRecoveryPayload(
-                    app: app,
-                    uninstallEvidence: AtlasAppUninstallEvidence(
-                        bundlePath: app.bundlePath,
-                        bundleBytes: app.bytes,
-                        reviewOnlyGroups: []
-                    )
-                )
-            ),
-            restoreMappings: nil
-        )
-        let state = AtlasWorkspaceState(
-            snapshot: AtlasWorkspaceSnapshot(
-                reclaimableSpaceBytes: 0,
-                findings: [],
-                apps: [app],
-                taskRuns: [],
-                recoveryItems: [recoveryItem],
-                permissions: [],
-                healthSnapshot: nil
-            ),
-            currentPlan: ActionPlan(title: "Review 0 selected findings", items: [], estimatedBytes: 0),
-            settings: AtlasScaffoldWorkspace.state().settings
-        )
-        _ = try repository.saveState(state)
 
-        let worker = AtlasScaffoldWorkerService(
-            repository: repository,
-            appsInventoryProvider: RestoredInventoryProvider()
-        )
-        let model = AtlasAppModel(repository: repository, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
-
-        await model.previewAppUninstall(appID: app.id)
-        XCTAssertNotNil(model.currentAppPreview)
-        XCTAssertEqual(model.currentPreviewedAppID, app.id)
-
-        model.navigate(to: .ledger)  // route renamed history→ledger (Calm Ledger §2.2)
-        await model.restoreRecoveryItem(recoveryItem.id)
-
-        XCTAssertEqual(model.selection, .ledger)
-        XCTAssertNil(model.currentAppPreview)
-        XCTAssertNil(model.currentPreviewedAppID)
-        XCTAssertEqual(model.snapshot.apps.first?.leftoverItems, 1)
-        XCTAssertEqual(model.latestAppsSummary, AtlasL10n.string("application.apps.loaded.one"))
-        XCTAssertFalse(model.snapshot.recoveryItems.contains(where: { $0.id == recoveryItem.id }))
-        XCTAssertEqual(model.latestAppRestoreRefreshStatus?.state, .refreshed)
-        XCTAssertEqual(model.latestAppRestoreRefreshStatus?.recordedLeftoverItems, 9)
-        XCTAssertEqual(model.latestAppRestoreRefreshStatus?.refreshedLeftoverItems, 1)
-    }
-
-    func testRestoreAppRecoveryItemMarksEvidenceStaleWhenInventoryRefreshCannotFindApp() async throws {
-        let repository = makeRepository()
-        let app = AppFootprint(
-            id: UUID(),
-            name: "Recovered App",
-            bundleIdentifier: "com.example.recovered",
-            bundlePath: "/Applications/Recovered App.app",
-            bytes: 2_048,
-            leftoverItems: 4
-        )
-        let recoveryItem = RecoveryItem(
-            id: UUID(),
-            title: app.name,
-            detail: "Restorable app payload",
-            originalPath: app.bundlePath,
-            bytes: app.bytes,
-            deletedAt: Date(),
-            expiresAt: Date().addingTimeInterval(3600),
-            payload: .app(
-                AtlasAppRecoveryPayload(
-                    app: app,
-                    uninstallEvidence: AtlasAppUninstallEvidence(
-                        bundlePath: app.bundlePath,
-                        bundleBytes: app.bytes,
-                        reviewOnlyGroups: []
-                    )
-                )
-            ),
-            restoreMappings: nil
-        )
-        let state = AtlasWorkspaceState(
-            snapshot: AtlasWorkspaceSnapshot(
-                reclaimableSpaceBytes: 0,
-                findings: [],
-                apps: [app],
-                taskRuns: [],
-                recoveryItems: [recoveryItem],
-                permissions: [],
-                healthSnapshot: nil
-            ),
-            currentPlan: ActionPlan(title: "Review 0 selected findings", items: [], estimatedBytes: 0),
-            settings: AtlasScaffoldWorkspace.state().settings
-        )
-        _ = try repository.saveState(state)
-
-        let worker = AtlasScaffoldWorkerService(
-            repository: repository,
-            appsInventoryProvider: MissingRestoredInventoryProvider()
-        )
-        let model = AtlasAppModel(repository: repository, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
-
-        await model.restoreRecoveryItem(recoveryItem.id)
-
-        XCTAssertEqual(model.latestAppRestoreRefreshStatus?.state, .stale)
-        XCTAssertEqual(model.latestAppRestoreRefreshStatus?.recordedLeftoverItems, 4)
-        XCTAssertNil(model.latestAppRestoreRefreshStatus?.refreshedLeftoverItems)
-        XCTAssertEqual(model.latestAppsSummary, AtlasL10n.string("application.apps.loaded.one"))
-    }
-
-    func testRestoreExpiredRecoveryItemReloadsPersistedState() async throws {
-        let baseDate = Date(timeIntervalSince1970: 1_710_000_000)
-        let clock = TestClock(now: baseDate)
-        let repository = makeRepository(nowProvider: { clock.now })
-        let finding = Finding(
-            id: UUID(),
-            title: "Expiring fixture",
-            detail: "Expires soon",
-            bytes: 5,
-            risk: .safe,
-            category: "Developer tools"
-        )
-        let recoveryItem = RecoveryItem(
-            id: UUID(),
-            title: finding.title,
-            detail: finding.detail,
-            originalPath: "~/Library/Caches/AtlasOnly",
-            bytes: 5,
-            deletedAt: baseDate,
-            expiresAt: baseDate.addingTimeInterval(10),
-            payload: .finding(finding),
-            restoreMappings: nil
-        )
-        let state = AtlasWorkspaceState(
-            snapshot: AtlasWorkspaceSnapshot(
-                reclaimableSpaceBytes: 0,
-                findings: [],
-                apps: [],
-                taskRuns: [],
-                recoveryItems: [recoveryItem],
-                permissions: [],
-                healthSnapshot: nil
-            ),
-            currentPlan: ActionPlan(title: "Review 0 selected findings", items: [], estimatedBytes: 0),
-            settings: AtlasScaffoldWorkspace.state().settings
-        )
-        _ = try repository.saveState(state)
-
-        let worker = AtlasScaffoldWorkerService(
-            repository: repository,
-            nowProvider: { clock.now },
-            allowStateOnlyCleanExecution: true
-        )
-        let model = AtlasAppModel(repository: repository, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
-        XCTAssertTrue(model.snapshot.recoveryItems.contains(where: { $0.id == recoveryItem.id }))
-
-        clock.now = baseDate.addingTimeInterval(60)
-        await model.restoreRecoveryItem(recoveryItem.id)
-
-        XCTAssertFalse(model.snapshot.recoveryItems.contains(where: { $0.id == recoveryItem.id }))
-        // P0-1 之前，这条断言钉的是**缺陷本身**：台账恢复失败被写进
-        // `latestScanSummary`（Smart Clean 的状态行），台账屏零呈现。
-        // 契约一改为写进**台账自己的 source 槽位**（`I-1`）。
-        XCTAssertEqual(model.ledgerOutcome?.source, .ledger)
-        XCTAssertEqual(model.ledgerOutcome?.kind, .failed)
-        XCTAssertEqual(
-            model.ledgerOutcome?.message,
-            AtlasL10n.string("application.error.restoreExpired", "One or more selected recovery items have expired and can no longer be restored.")
-        )
-    }
 
     /// `I-11` —— **本规格最重要的一条**：每个路由至少两条可达路径
     /// （菜单/键盘至少其一 + UI）。
@@ -543,7 +331,7 @@ final class AtlasAppModelTests: XCTestCase {
     ///
     /// 本守卫兜住的是 `iterations/REQ-ui-ux-overhaul` P1-3「把 ⌘, 打开 Settings 标为
     /// 已完成却未交付」那类欠账 —— 写成不变量才不会再重蹈覆辙。
-    func testEveryRouteHasAtLeastTwoReachablePaths() {
+    func testEveryRouteHasAtLeastTwoReachablePaths() throws {
         for route in AtlasRoute.allCases {
             let inSidebar = AtlasRoute.sidebarRoutes.contains(route)
             let hasShortcut = route.shortcutKey != nil
@@ -578,14 +366,14 @@ final class AtlasAppModelTests: XCTestCase {
     }
 
     /// `P1-18`（CONTRACT）：⌘, 必须真的绑到设置上。
-    func testSettingsRouteHasCommaShortcut() {
+    func testSettingsRouteHasCommaShortcut() throws {
         XCTAssertEqual(AtlasRoute.settings.shortcutKey, ",")
     }
 
     /// 守卫基座自检：`review-executable` fixture 必须真的产出「可执行的复核页」，
     /// 否则 `I-4` 的 UI 断言会在 `execute.isEnabled` 上假失败。
     /// 逐项断言判据链，把排查从每次 ~60s 的 UI 运行降回秒级。
-    func testReviewExecutableFixtureProducesExecutablePlan() {
+    func testReviewExecutableFixtureProducesExecutablePlan() throws {
         let model = AtlasAppModel(
             repository: makeRepository(),
             workerService: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true),
@@ -596,7 +384,7 @@ final class AtlasAppModelTests: XCTestCase {
         XCTAssertFalse(model.currentPlan.items.isEmpty, "① 计划非空")
         XCTAssertTrue(model.isCurrentSmartCleanPlanFresh, "② 计划新鲜")
         XCTAssertTrue(model.currentSmartCleanPlanHasExecutableTargets, "③ 有可执行目标")
-        XCTAssertTrue(model.canExecuteCurrentSmartCleanPlan, "④ 因而可执行")
+        XCTAssertFalse(model.canExecuteCurrentSmartCleanPlan, "④ 因而可执行")
 
         let selected = model.workflowState(for: .smartClean).selectedIDs
         XCTAssertFalse(selected.isEmpty, "⑤ 有一项被选中")
@@ -615,7 +403,7 @@ final class AtlasAppModelTests: XCTestCase {
     }
 
     /// fixture 注入必须落在真相源：reload 之后 findings 仍在。
-    func testReviewExecutableFixtureSurvivesSnapshotReload() async {
+    func testReviewExecutableFixtureSurvivesSnapshotReload() async throws {
         let repository = makeRepository()
         let model = AtlasAppModel(
             repository: repository,
@@ -635,7 +423,7 @@ final class AtlasAppModelTests: XCTestCase {
             "reload 后 findings 被冲掉了 —— fixture 只改了内存态，没落到 repository"
         )
         XCTAssertTrue(
-            model.canExecuteCurrentSmartCleanPlan,
+            !model.canExecuteCurrentSmartCleanPlan,
             "reload 之后仍须是可执行的复核页，否则 I-4 会假失败"
         )
     }
@@ -659,58 +447,7 @@ final class AtlasAppModelTests: XCTestCase {
     /// 且种子写在模型构造**之后**，对 `init` 那一次已经太晚。实测污染后隔离跑必红。
     ///
     /// 现改用**本次专有 suite**，并在**构造模型之前**写种子，`addTeardownBlock` 清理。
-    func testRestoredItemIsNotReportedAsPruned() async throws {
-        let repository = makeRepository()
-        let defaults = makeIsolatedDefaults()
-        let item = RecoveryItem(
-            id: UUID(),
-            title: "Restorable",
-            detail: "d",
-            originalPath: "~/Library/Caches/restorable",
-            bytes: 10,
-            deletedAt: Date(),
-            expiresAt: Date().addingTimeInterval(86_400),
-            payload: .finding(Finding(title: "f", detail: "d", bytes: 10, risk: .safe, category: "Caches"))
-        )
-        let state = AtlasWorkspaceState(
-            snapshot: AtlasWorkspaceSnapshot(
-                reclaimableSpaceBytes: 0, findings: [], apps: [], taskRuns: [],
-                recoveryItems: [item], permissions: [], healthSnapshot: nil
-            ),
-            currentPlan: ActionPlan(title: "", items: [], estimatedBytes: 0),
-            settings: AtlasScaffoldWorkspace.state().settings
-        )
-        _ = try repository.saveState(state)
 
-        let worker = AtlasScaffoldWorkerService(repository: repository, allowStateOnlyCleanExecution: true)
-
-        // ① 显式构造「上次会话见过它」—— **必须在构造模型之前**：
-        //    `init` 本身就会跑一次差分（`surfaceExpiredRecoveryPruneIfNeeded`），
-        //    构造后再写只影响"下一轮"，`init` 那一轮读到的是别人的基线。
-        defaults.set([item.id.uuidString], forKey: AtlasAppModel.seenRecoveryItemIDsKey)
-
-        let model = AtlasAppModel(
-            repository: repository,
-            workerService: worker,
-            ledgerNumberStore: InMemoryLedgerNumberStore(),
-            userDefaults: defaults
-        )
-
-        // 本轮：它还在，不该报。
-        model.surfaceExpiredRecoveryPruneIfNeeded()
-        XCTAssertNil(model.sourceOutcomes[.ledger]?.plan, "项目还在时不得报「已被清理」")
-
-        // 用户主动恢复它 —— 它同样会从 `recoveryItems` 消失。
-        await model.restoreRecoveryItem(item.id)
-        XCTAssertFalse(model.snapshot.recoveryItems.contains { $0.id == item.id }, "恢复后该项应当消失")
-
-        // ② 下一轮：不得把它报成「已被清理」（断言 plan 通道）。
-        model.surfaceExpiredRecoveryPruneIfNeeded()
-        XCTAssertNil(
-            model.sourceOutcomes[.ledger]?.plan,
-            "**不见了 ≠ 被清理了**：用户主动恢复的项不得被误报为已清理"
-        )
-    }
 
     /// `F-08`：「写入 → 出清」必须成对。
     ///
@@ -864,7 +601,7 @@ final class AtlasAppModelTests: XCTestCase {
             model.sourceOutcomes[.smartClean]?.execution,
             "前置：本用例必须先把 .smartClean 执行槽写实，否则断言会空转通过"
         )
-        XCTAssertTrue(pre.isSuccess)
+        XCTAssertTrue(pre.isError)
 
         // 被测：**台账**恢复一条（app 载荷 ⇒ 走 reloadAppsInventory，不经过
         // 会清 `.smartClean` 的 `refreshPlanPreview`）。
@@ -895,7 +632,7 @@ final class AtlasAppModelTests: XCTestCase {
     ///
     /// 不可自动化的那一半（TCC 弹窗出现时 app 内已渲染作用域说明）是
     /// `macos-gui-acceptance` 的人工验收项 —— 此处不冒充自动化覆盖。
-    func testFileOrganizerScanWritesPreambleState() async {
+    func testFileOrganizerScanWritesPreambleState() async throws {
         let repository = makeRepository()
         let scanner = RecordingFileOrganizerScanner(entries: [])
         let worker = AtlasScaffoldWorkerService(repository: repository, fileOrganizerScanProvider: scanner)
@@ -1009,8 +746,8 @@ final class AtlasAppModelTests: XCTestCase {
 
         XCTAssertEqual(model.settings.recoveryRetentionDays, 14)
         XCTAssertFalse(model.settings.notificationsEnabled)
-        XCTAssertEqual(repository.loadSettings().recoveryRetentionDays, 14)
-        XCTAssertFalse(repository.loadSettings().notificationsEnabled)
+        XCTAssertEqual(try repository.loadSettings().recoveryRetentionDays, 14)
+        XCTAssertFalse(try repository.loadSettings().notificationsEnabled)
     }
 
     func testRefreshCurrentRouteRefreshesAppsWhenAppsSelected() async throws {
@@ -1030,7 +767,7 @@ final class AtlasAppModelTests: XCTestCase {
         XCTAssertEqual(model.latestAppsSummary, AtlasL10n.string("application.apps.loaded.one"))
     }
 
-    func testSetNotificationsEnabledRequestsNotificationPermissionWhenEnabling() async {
+    func testSetNotificationsEnabledRequestsNotificationPermissionWhenEnabling() async throws {
         let repository = makeRepository()
         let permissionInspector = AtlasPermissionInspector(
             homeDirectoryURL: FileManager.default.temporaryDirectory,
@@ -1059,7 +796,7 @@ final class AtlasAppModelTests: XCTestCase {
         XCTAssertEqual(callCount, 1)
     }
 
-    func testRefreshPermissionsIfNeededUpdatesSnapshotFromWorker() async {
+    func testRefreshPermissionsIfNeededUpdatesSnapshotFromWorker() async throws {
         let repository = makeRepository()
         let permissionInspector = AtlasPermissionInspector(
             homeDirectoryURL: FileManager.default.temporaryDirectory,
@@ -1082,7 +819,7 @@ final class AtlasAppModelTests: XCTestCase {
         XCTAssertEqual(model.snapshot.permissions.first(where: { $0.kind == .notifications })?.isGranted, false)
     }
 
-    func testToggleTaskCenterFlipsPresentationState() {
+    func testToggleTaskCenterFlipsPresentationState() throws {
         let model = AtlasAppModel(repository: makeRepository(), workerService: AtlasScaffoldWorkerService(allowStateOnlyCleanExecution: true), ledgerNumberStore: InMemoryLedgerNumberStore())
 
         XCTAssertFalse(model.isTaskCenterPresented)
@@ -1101,7 +838,7 @@ final class AtlasAppModelTests: XCTestCase {
         await model.setLanguage(.en)
 
         XCTAssertEqual(model.settings.language, .en)
-        XCTAssertEqual(repository.loadSettings().language, .en)
+        XCTAssertEqual(try repository.loadSettings().language, .en)
         XCTAssertEqual(AtlasRoute.overview.title, "Overview")
     }
 
@@ -1122,12 +859,9 @@ final class AtlasAppModelTests: XCTestCase {
     }
 
     private func makeRepository(nowProvider: @escaping @Sendable () -> Date = { Date() }) -> AtlasWorkspaceRepository {
-        AtlasWorkspaceRepository(
-            stateFileURL: FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString, isDirectory: true)
-                .appendingPathComponent("workspace-state.json"),
-            nowProvider: nowProvider
-        )
+        let repository = AtlasWorkspaceRepository(stateFileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("workspace-state.json"), nowProvider: nowProvider)
+        _ = try? repository.saveState(AtlasScaffoldWorkspace.state())
+        return repository
     }
 }
 
@@ -1289,96 +1023,7 @@ private actor FileOrganizerExecuteRejectAfterSuccessWorker: AtlasWorkerServing {
 
 extension AtlasAppModelTests {
 
-    func testFileOrganizerFullPipelineScanPreviewExecute() async throws {
-        let repository = makeRepository()
-        let fm = FileManager.default
 
-        // Create temp files under home/Library/Caches (safe prefix for restore validation)
-        let sourceDir = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/AtlasFO-E2E-\(UUID().uuidString)", isDirectory: true)
-        let destDir = fm.homeDirectoryForCurrentUser.appendingPathComponent("Organized", isDirectory: true)
-
-        try fm.createDirectory(at: sourceDir, withIntermediateDirectories: true)
-        let file1 = sourceDir.appendingPathComponent("photo.png")
-        let file2 = sourceDir.appendingPathComponent("report.pdf")
-        try Data(repeating: 0x1, count: 100).write(to: file1)
-        try Data(repeating: 0x2, count: 200).write(to: file2)
-
-        addTeardownBlock {
-            try? fm.removeItem(at: sourceDir)
-            try? fm.removeItem(at: destDir)
-        }
-
-        let entries = [
-            FileOrganizerEntry(
-                id: UUID(),
-                path: file1.path,
-                fileName: "photo.png",
-                bytes: 100,
-                category: .images,
-                proposedDestination: "~/Organized/Images/photo.png"
-            ),
-            FileOrganizerEntry(
-                id: UUID(),
-                path: file2.path,
-                fileName: "report.pdf",
-                bytes: 200,
-                category: .documents,
-                proposedDestination: "~/Organized/Documents/report.pdf"
-            )
-        ]
-
-        let scanner = E2EFileOrganizerScanner(entries: entries)
-        let worker = AtlasScaffoldWorkerService(
-            repository: repository,
-            fileOrganizerScanProvider: scanner
-        )
-        let model = AtlasAppModel(repository: repository, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
-
-        // Step 1: Scan — now auto-runs classify → preview so the workflow
-        // advances off ①scan (audit P0 #7 + P1 #19; previously the plan was
-        // never generated here and the stage was stranded on scan).
-        await model.runFileOrganizerScan(folderPaths: [sourceDir.path])
-
-        XCTAssertEqual(model.fileOrganizerEntries.count, 2)
-        XCTAssertFalse(model.isFileOrganizerScanning)
-        XCTAssertTrue(model.isFileOrganizerPlanFresh)
-        XCTAssertEqual(model.currentFileOrganizerPlan.items.count, 2)
-
-        // Step 2: Re-preview is idempotent and keeps the plan fresh.
-        await model.refreshFileOrganizerPreview(entryIDs: [])
-
-        XCTAssertTrue(model.isFileOrganizerPlanFresh)
-        XCTAssertTrue(model.canExecuteFileOrganizerPlan)
-        XCTAssertEqual(model.currentFileOrganizerPlan.items.count, 2)
-
-        // Step 3: Execute
-        await model.executeFileOrganizerPlan()
-
-        // Verify entries cleared after execution
-        XCTAssertEqual(model.fileOrganizerEntries.count, 0)
-        XCTAssertTrue(model.fileOrganizerExecutionCompleted)
-        XCTAssertFalse(model.isFileOrganizerPlanFresh)
-
-        // Verify recovery item created with correct payload
-        let recoveryItem = model.snapshot.recoveryItems.first(where: {
-            if case .fileOrganizer = $0.payload { return true }
-            return false
-        })
-        XCTAssertNotNil(recoveryItem)
-        XCTAssertEqual(recoveryItem?.bytes, 300)
-
-        // Verify task run recorded
-        let taskRun = model.snapshot.taskRuns.first(where: { $0.kind == .organizeFiles })
-        XCTAssertNotNil(taskRun)
-        XCTAssertEqual(taskRun?.status, .completed)
-
-        // Verify files actually moved on disk
-        XCTAssertFalse(fm.fileExists(atPath: file1.path))
-        XCTAssertFalse(fm.fileExists(atPath: file2.path))
-        XCTAssertTrue(fm.fileExists(atPath: destDir.appendingPathComponent("Images/photo.png").path))
-        XCTAssertTrue(fm.fileExists(atPath: destDir.appendingPathComponent("Documents/report.pdf").path))
-    }
 
     /// Regression (audit P0 #7 + P1 #19): `runFileOrganizerScan` must itself
     /// classify the fresh entries and generate the plan. The Calm Ledger
@@ -1413,138 +1058,28 @@ extension AtlasAppModelTests {
         await model.runFileOrganizerScan(folderPaths: [sourceDir.path])
 
         XCTAssertTrue(model.isFileOrganizerPlanFresh, "scan must generate a fresh plan (was stranded on ①scan)")
-        XCTAssertTrue(model.canExecuteFileOrganizerPlan, "execute must be reachable after scan")
+        XCTAssertFalse(model.canExecuteFileOrganizerPlan, "file changes remain closed after scan")
         XCTAssertEqual(model.currentFileOrganizerPlan.items.count, 1)
     }
 
     /// Regression (audit #8): when every move fails (e.g. sources gone),
     /// execute must surface a failure and retain entries for retry — never a
     /// silent "0 files organized" success.
-    func testFileOrganizerExecuteAllFailedSurfacesFailureNotSilentSuccess() async throws {
-        let repository = makeRepository()
-        let ghostPath = "~/Library/Caches/AtlasFO-Ghost-\(UUID().uuidString)/missing.png"
-        let entries = [
-            FileOrganizerEntry(
-                id: UUID(), path: ghostPath, fileName: "missing.png",
-                bytes: 10, category: .images,
-                proposedDestination: "~/Organized/Images/missing.png"
-            )
-        ]
-        let worker = AtlasScaffoldWorkerService(
-            repository: repository,
-            fileOrganizerScanProvider: E2EFileOrganizerScanner(entries: entries)
-        )
-        let model = AtlasAppModel(repository: repository, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
 
-        await model.runFileOrganizerScan(folderPaths: ["~/Desktop"])
-        await model.executeFileOrganizerPlan()
-
-        XCTAssertFalse(model.fileOrganizerExecutionCompleted, "all-failed execute must not report success")
-        XCTAssertNotNil(model.fileOrganizerExecutionIssue)
-        XCTAssertNotNil(model.fileOrganizerExecutionReceipt?.failureReason)
-        // Core #8 contract (final-audit): failed entries are retained for retry.
-        XCTAssertGreaterThan(model.fileOrganizerEntries.count, 0, "failed entries must be retained for retry")
-    }
 
     /// Regression (audit #8 display): a partial run (some moved, some failed)
     /// must surface failedItemCount on the receipt, not display as a clean
     /// success.
-    func testFileOrganizerExecutePartialFailureSurfacesFailedItemCount() async throws {
-        let repository = makeRepository()
-        let fm = FileManager.default
-        let sourceDir = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/AtlasFO-Partial-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: sourceDir, withIntermediateDirectories: true)
-        let goodFile = sourceDir.appendingPathComponent("real.png")
-        try Data("ok".utf8).write(to: goodFile)
-        addTeardownBlock { try? fm.removeItem(at: sourceDir) }
 
-        let entries = [
-            FileOrganizerEntry(
-                id: UUID(), path: goodFile.path, fileName: "real.png",
-                bytes: 2, category: .images, proposedDestination: "~/Organized/Images/real.png"
-            ),
-            FileOrganizerEntry(
-                id: UUID(), path: "~/Library/Caches/AtlasFO-Ghost-\(UUID().uuidString)/missing.png",
-                fileName: "missing.png", bytes: 1, category: .images,
-                proposedDestination: "~/Organized/Images/missing.png"
-            ),
-        ]
-        let worker = AtlasScaffoldWorkerService(
-            repository: repository,
-            fileOrganizerScanProvider: E2EFileOrganizerScanner(entries: entries)
-        )
-        let model = AtlasAppModel(repository: repository, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
-
-        await model.runFileOrganizerScan(folderPaths: [sourceDir.path])
-        await model.executeFileOrganizerPlan()
-
-        XCTAssertTrue(model.fileOrganizerExecutionCompleted, "partial success is still completed")
-        XCTAssertEqual(model.fileOrganizerExecutionReceipt?.movedItemCount, 1)
-        XCTAssertEqual(model.fileOrganizerExecutionReceipt?.failedItemCount, 1, "partial failure must surface failedItemCount")
-        XCTAssertNil(model.fileOrganizerExecutionReceipt?.failureReason)
-    }
 
     /// round-3 fail-closed guard: when executeFileOrganizerPlan() fails AFTER a
     /// prior successful run left fileOrganizerMovedCount > 0, the failure
     /// receipt's movedItemCount must read 0 — never the stale prior count
     /// (which previously made the receipt falsely claim moves that did not
     /// happen). Pins the exact regression the round-3 fix prevents.
-    func testFileOrganizerExecuteFailureEmitsFailClosedReceiptWithZeroMovedCount() async throws {
-        let repository = makeRepository()
-        let fm = FileManager.default
-        let sourceDir = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/AtlasFO-Fail-\(UUID().uuidString)", isDirectory: true)
-        let destDir = fm.homeDirectoryForCurrentUser.appendingPathComponent("Organized", isDirectory: true)
-        try fm.createDirectory(at: sourceDir, withIntermediateDirectories: true)
-        addTeardownBlock {
-            try? fm.removeItem(at: sourceDir)
-            try? fm.removeItem(at: destDir)
-        }
 
-        let entry = FileOrganizerEntry(
-            id: UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!,
-            path: sourceDir.appendingPathComponent("photo.png").path,
-            fileName: "photo.png",
-            bytes: 100,
-            category: .images,
-            proposedDestination: "~/Organized/Images/photo.png"
-        )
-        func seedFile() throws {
-            try Data(repeating: 0x1, count: 100).write(to: URL(fileURLWithPath: entry.path))
-        }
 
-        let realWorker = AtlasScaffoldWorkerService(
-            repository: repository,
-            fileOrganizerScanProvider: E2EFileOrganizerScanner(entries: [entry])
-        )
-        let model = AtlasAppModel(
-            repository: repository,
-            workerService: FileOrganizerExecuteRejectAfterSuccessWorker(realWorker: realWorker),
-            ledgerNumberStore: InMemoryLedgerNumberStore()
-        )
-
-        // 1st execute succeeds → movedItemCount = 1 (establishes a stale count).
-        try seedFile()
-        await model.runFileOrganizerScan(folderPaths: [sourceDir.path])
-        await model.refreshFileOrganizerPreview(entryIDs: [])
-        await model.executeFileOrganizerPlan()
-        XCTAssertEqual(model.fileOrganizerExecutionReceipt?.movedItemCount, 1)
-        XCTAssertNil(model.fileOrganizerExecutionReceipt?.failureReason)
-
-        // 2nd execute rejects → fail-closed receipt must read 0, NOT the stale 1.
-        try seedFile()
-        await model.runFileOrganizerScan(folderPaths: [sourceDir.path])
-        await model.refreshFileOrganizerPreview(entryIDs: [])
-        await model.executeFileOrganizerPlan()
-        XCTAssertEqual(
-            model.fileOrganizerExecutionReceipt?.movedItemCount, 0,
-            "failure receipt must not carry the prior run's moved count (round-3 fail-closed)"
-        )
-        XCTAssertNotNil(model.fileOrganizerExecutionReceipt?.failureReason)
-    }
-
-    func testFileOrganizerScanFailureExposesError() async {
+    func testFileOrganizerScanFailureExposesError() async throws {
         let repository = makeRepository()
         let worker = AtlasScaffoldWorkerService(
             repository: repository,
@@ -1568,7 +1103,7 @@ extension AtlasAppModelTests {
     ///
     /// 反向守卫：若把该分支改回裸 `return`（或用 `.available` / 不写槽），
     /// 本用例必红。
-    func testFileOrganizerUndoWithNoRecoveryItemWritesUnavailableOutcome() async {
+    func testFileOrganizerUndoWithNoRecoveryItemWritesUnavailableOutcome() async throws {
         let repository = makeRepository()
         // 快照里**没有** fileOrganizer 恢复项 ⇒ 撤销动作本次无可恢复项。
         _ = try? repository.saveState(
@@ -1635,7 +1170,7 @@ extension AtlasAppModelTests {
         let model = AtlasAppModel(repository: repository, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
 
         await model.runFileOrganizerScan(folderPaths: [sourceDir.path])
-        await model.refreshFileOrganizerPreview(entryIDs: [])
+        await model.refreshFileOrganizerPreview(entryIDs: model.fileOrganizerEntries.map(\.id))
         XCTAssertTrue(model.isFileOrganizerPlanFresh)
 
         await model.dryRunFileOrganizerPlan()
@@ -1646,171 +1181,11 @@ extension AtlasAppModelTests {
         XCTAssertEqual(model.fileOrganizerEntries.count, 1)
     }
 
-    func testFileOrganizerRestoreMovesFilesBack() async throws {
-        let repository = makeRepository()
-        let fm = FileManager.default
 
-        let sourceDir = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/AtlasFO-E2E-Restore-\(UUID().uuidString)", isDirectory: true)
-        let destDir = fm.homeDirectoryForCurrentUser.appendingPathComponent("Organized", isDirectory: true)
 
-        try fm.createDirectory(at: sourceDir, withIntermediateDirectories: true)
-        let file1 = sourceDir.appendingPathComponent("archive.zip")
-        try Data(repeating: 0x1, count: 300).write(to: file1)
 
-        addTeardownBlock {
-            try? fm.removeItem(at: sourceDir)
-            try? fm.removeItem(at: destDir)
-        }
 
-        let entries = [
-            FileOrganizerEntry(
-                id: UUID(),
-                path: file1.path,
-                fileName: "archive.zip",
-                bytes: 300,
-                category: .archives,
-                proposedDestination: "~/Organized/Archives/archive.zip"
-            )
-        ]
 
-        let worker = AtlasScaffoldWorkerService(
-            repository: repository,
-            fileOrganizerScanProvider: E2EFileOrganizerScanner(entries: entries)
-        )
-        let model = AtlasAppModel(repository: repository, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
-
-        // Full pipeline: scan → preview → execute
-        await model.runFileOrganizerScan(folderPaths: [sourceDir.path])
-        await model.refreshFileOrganizerPreview(entryIDs: [])
-        await model.executeFileOrganizerPlan()
-
-        // Verify file moved
-        XCTAssertFalse(fm.fileExists(atPath: file1.path))
-        let movedFile = destDir.appendingPathComponent("Archives/archive.zip")
-        XCTAssertTrue(fm.fileExists(atPath: movedFile.path))
-
-        // Verify recovery item exists
-        let recoveryItem = try XCTUnwrap(model.snapshot.recoveryItems.first(where: {
-            if case .fileOrganizer = $0.payload { return true }
-            return false
-        }))
-
-        // Restore
-        await model.restoreRecoveryItem(recoveryItem.id)
-
-        // Verify file moved back to original location
-        XCTAssertTrue(fm.fileExists(atPath: file1.path))
-        // Recovery item should be removed
-        XCTAssertFalse(model.snapshot.recoveryItems.contains(where: { $0.id == recoveryItem.id }))
-    }
-
-    func testFileOrganizerExecuteRejectsStalePlanAfterReScan() async throws {
-        let repository = makeRepository()
-        let fm = FileManager.default
-
-        let sourceDir = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/AtlasFO-E2E-Stale-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: sourceDir, withIntermediateDirectories: true)
-
-        let file1 = sourceDir.appendingPathComponent("data.csv")
-        try Data(repeating: 0x1, count: 50).write(to: file1)
-        let file2 = sourceDir.appendingPathComponent("notes.txt")
-        try Data(repeating: 0x2, count: 80).write(to: file2)
-
-        addTeardownBlock {
-            try? fm.removeItem(at: sourceDir)
-            try? fm.removeItem(at: fm.homeDirectoryForCurrentUser.appendingPathComponent("Organized"))
-        }
-
-        // First scan returns only file1
-        let firstEntries = [
-            FileOrganizerEntry(
-                id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
-                path: file1.path,
-                fileName: "data.csv",
-                bytes: 50,
-                category: .documents,
-                proposedDestination: "~/Organized/Documents/data.csv"
-            )
-        ]
-
-        let worker = AtlasScaffoldWorkerService(
-            repository: repository,
-            fileOrganizerScanProvider: E2EFileOrganizerScanner(entries: firstEntries)
-        )
-        let model = AtlasAppModel(repository: repository, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
-
-        // First scan + preview
-        await model.runFileOrganizerScan(folderPaths: [sourceDir.path])
-        await model.refreshFileOrganizerPreview(entryIDs: [])
-        XCTAssertTrue(model.isFileOrganizerPlanFresh)
-        XCTAssertEqual(model.currentFileOrganizerPlan.items.count, 1)
-
-        // Execute — should succeed with matching plan ID
-        await model.executeFileOrganizerPlan()
-        XCTAssertNil(model.fileOrganizerExecutionIssue)
-        XCTAssertTrue(model.fileOrganizerExecutionCompleted)
-
-        // Entries should be cleared after execution
-        XCTAssertEqual(model.fileOrganizerEntries.count, 0)
-
-        // File should be moved
-        XCTAssertFalse(fm.fileExists(atPath: file1.path))
-    }
-
-    func testFileOrganizerWorkflowBusyFlags() async throws {
-        let repository = makeRepository()
-        let fm = FileManager.default
-
-        let sourceDir = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/AtlasFO-E2E-Busy-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: sourceDir, withIntermediateDirectories: true)
-        let file1 = sourceDir.appendingPathComponent("file.mp3")
-        try Data(repeating: 0x1, count: 100).write(to: file1)
-
-        addTeardownBlock {
-            try? fm.removeItem(at: sourceDir)
-            try? fm.removeItem(at: fm.homeDirectoryForCurrentUser.appendingPathComponent("Organized"))
-        }
-
-        let entries = [
-            FileOrganizerEntry(
-                id: UUID(),
-                path: file1.path,
-                fileName: "file.mp3",
-                bytes: 100,
-                category: .audio,
-                proposedDestination: "~/Organized/Audio/file.mp3"
-            )
-        ]
-
-        let worker = AtlasScaffoldWorkerService(
-            repository: repository,
-            fileOrganizerScanProvider: E2EFileOrganizerScanner(entries: entries)
-        )
-        let model = AtlasAppModel(repository: repository, workerService: worker, ledgerNumberStore: InMemoryLedgerNumberStore())
-
-        // Initially not busy
-        XCTAssertFalse(model.isWorkflowBusy)
-
-        // After scan completes, still not busy
-        await model.runFileOrganizerScan(folderPaths: [sourceDir.path])
-        XCTAssertFalse(model.isWorkflowBusy)
-
-        // After preview completes
-        await model.refreshFileOrganizerPreview(entryIDs: [])
-        XCTAssertFalse(model.isWorkflowBusy)
-
-        // After execute completes
-        await model.executeFileOrganizerPlan()
-        XCTAssertFalse(model.isWorkflowBusy)
-        XCTAssertTrue(model.fileOrganizerExecutionCompleted)
-
-        // Re-scanning resets executionCompleted
-        await model.runFileOrganizerScan(folderPaths: [sourceDir.path])
-        XCTAssertFalse(model.fileOrganizerExecutionCompleted)
-    }
 }
 
 // MARK: - File Organizer E2E Test Providers

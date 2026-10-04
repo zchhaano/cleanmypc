@@ -1340,3 +1340,17 @@
 "glossary.restorepoint.definition" = "A recoverable position created before a run. You can restore to the original path while the retention period is open.";
 
 "security.mutation.unavailable" = "File changes are unavailable until recovery safety checks are complete.";
+"security.recovery.ready" = "The recorded source is available. Recovery depends on it remaining unchanged.";
+"security.recovery.unverified" = "This older record cannot prove the file is recoverable. Review it manually.";
+"security.recovery.sourceMissing" = "The recovery source is missing. No file was restored.";
+"security.recovery.targetConflict" = "The original location is occupied. Nothing was overwritten.";
+"security.recovery.reconciliationRequired" = "The file change could not be confirmed. Check the recorded paths before continuing.";
+"security.recovery.restored" = "The file was restored and its identity was verified.";
+"security.execution.result" = "Changed %d files; %d files failed or need review.";
+"security.restore.completed" = "Restored %d files and verified their identity.";
+"security.execution.unknown" = "The file change is unconfirmed. Check the files before continuing. Record: %@";
+
+"security.state.unavailable" = "Saved records could not be read. File changes are unavailable: %@";
+"security.recovery.recordsChanged" = "%d previously displayed records are absent. Their recovery status is unknown.";
+
+"security.provider.unavailable" = "The scan service is unavailable. Refresh after it is available.";

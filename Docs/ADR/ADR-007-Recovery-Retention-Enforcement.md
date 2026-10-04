@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted; persistence pruning superseded by the 2026-10-01 security hardening below.
 
 ## Context
 
@@ -30,3 +30,7 @@ This creates a trust gap in a release-sensitive area: History and Recovery can c
 - Narrow docs to match current behavior: rejected because it preserves an avoidable trust gap.
 - Enforce expiry only in the restore command: rejected because stale entries would still persist in active recovery state.
 - Fix only in UI: rejected because restore is ultimately a worker-boundary guarantee.
+
+## Security revision — 2026-10-04
+
+Schema 2 retains recovery evidence on both load and save, including expired, failed and unknown operations. Expiry still disables automatic restore in the Worker/UI, but never deletes a journal record or its physical source. The old repository pruning decision above is superseded. History may archive records without claiming that a source was removed or restored. Missing displayed rows are reported as unknown changes, never inferred as expiry.

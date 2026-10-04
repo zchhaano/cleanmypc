@@ -17,6 +17,7 @@ let package = Package(
             dependencies: [
                 .product(name: "AtlasProtocol", package: "Packages"),
                 .product(name: "AtlasFileSafety", package: "Packages"),
+                .product(name: "AtlasInfrastructure", package: "Packages"),
             ],
             path: "AtlasPrivilegedHelper/Sources/AtlasPrivilegedHelperCore"
         ),

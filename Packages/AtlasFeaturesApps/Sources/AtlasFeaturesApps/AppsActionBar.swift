@@ -19,9 +19,9 @@ struct AppsActionBar: View {
     var body: some View {
         AtlasActionBar(
             primaryTitle: primaryTitle,
-            primaryEnabled: !isRunning,
+            primaryEnabled: !isRunning && (previewPlan == nil || AtlasSafetyCapabilities.fileMutationsEnabled),
             onPrimary: onPrimary,
-            promise: AppsEvidencePanelBuilder.actionBarPromise(plan: previewPlan, retentionDays: retentionDays),
+            promise: AtlasSafetyCapabilities.fileMutationsEnabled ? AppsEvidencePanelBuilder.actionBarPromise(plan: previewPlan, retentionDays: retentionDays) : AtlasL10n.string("security.mutation.unavailable"),
             metricText: AppsEvidencePanelBuilder.actionBarMetric(selectedApp: selectedApp),
             // No determinate progress during uninstall (round-16): the model
             // holds activeUninstallAppID for the whole run with no progress

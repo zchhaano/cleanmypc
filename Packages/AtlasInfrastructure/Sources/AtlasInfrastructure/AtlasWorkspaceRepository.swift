@@ -37,124 +37,70 @@ public struct AtlasWorkspaceRepository: Sendable {
         self.nowProvider = nowProvider
     }
 
-    public func loadState() -> AtlasWorkspaceState {
-        let decoder = JSONDecoder()
-
-        if FileManager.default.fileExists(atPath: stateFileURL.path) {
-            do {
-                let data = try Data(contentsOf: stateFileURL)
-                let decodedResult = try decodePersistedState(from: data, using: decoder)
-                let decoded = decodedResult.state
-                let normalized = normalizedState(decoded)
-                if decodedResult.usedLegacyShape || normalized != decoded {
-                    _ = try? saveState(normalized)
-                }
-                return normalized
-            } catch let repositoryError as AtlasWorkspaceRepositoryError {
-                reportFailure(repositoryError, operation: "load existing workspace state from \(stateFileURL.path)")
-            } catch {
-                reportFailure(
-                    AtlasWorkspaceRepositoryError.decodeFailed(error.localizedDescription),
-                    operation: "decode workspace state from \(stateFileURL.path)"
-                )
+    public var directoryURL: URL { stateFileURL.deletingLastPathComponent() }
+    public func loadState() throws -> AtlasWorkspaceState {
+        let directory = try AtlasSecureDirectory(directoryURL)
+        let coordinator = try AtlasMutationCoordinator(directoryURL: directoryURL)
+        return try coordinator.withSynchronousLease {
+            guard let data = try directory.readFile(stateFileURL.lastPathComponent) else {
+                let state = AtlasWorkspaceState.empty
+                try writeState(state, directory: directory)
+                return state
             }
+            let decoded = try decode(data)
+            if decoded.migrate {
+                let backup = stateFileURL.lastPathComponent + ".schema1.backup"
+                if let existing = try directory.readFile(backup) { guard existing == data else { throw AtlasJournalError.corrupt } }
+                else { try directory.writeAtomic(backup, data: data, replacing: false) }
+                try writeState(decoded.state, directory: directory)
+            }
+            return decoded.state
         }
-
-        let state = AtlasScaffoldWorkspace.state()
-        do {
-            _ = try saveState(state)
-        } catch {
-            reportFailure(error, operation: "seed initial workspace state at \(stateFileURL.path)")
-        }
-        return state
     }
-
     @discardableResult
     public func saveState(_ state: AtlasWorkspaceState) throws -> AtlasWorkspaceState {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let normalizedState = normalizedState(state)
-
+        let directory = try AtlasSecureDirectory(directoryURL)
+        let coordinator = try AtlasMutationCoordinator(directoryURL: directoryURL)
+        return try coordinator.withSynchronousLease {
+            if let data = try directory.readFile(stateFileURL.lastPathComponent) { _ = try decode(data) }
+            try writeState(state, directory: directory)
+            return state
+        }
+    }
+    public func loadScaffoldSnapshot() throws -> AtlasWorkspaceSnapshot { try loadState().snapshot }
+    public func loadCurrentPlan() throws -> ActionPlan { try loadState().currentPlan }
+    public func loadSettings() throws -> AtlasSettings { try loadState().settings }
+    private func writeState(_ state: AtlasWorkspaceState, directory: AtlasSecureDirectory) throws {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        try directory.writeAtomic(stateFileURL.lastPathComponent, data: encoder.encode(AtlasPersistedWorkspaceState(savedAt: nowProvider(), state: state)))
+    }
+    private func decode(_ data: Data) throws -> (state: AtlasWorkspaceState, migrate: Bool) {
+        let decoder = JSONDecoder()
         do {
-            try FileManager.default.createDirectory(
-                at: stateFileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-        } catch {
-            throw AtlasWorkspaceRepositoryError.createDirectoryFailed(error.localizedDescription)
-        }
-
-        let data: Data
-        do {
-            data = try encoder.encode(
-                AtlasPersistedWorkspaceState(
-                    savedAt: nowProvider(),
-                    state: normalizedState
-                )
-            )
-        } catch {
-            throw AtlasWorkspaceRepositoryError.encodeFailed(error.localizedDescription)
-        }
-
-        do {
-            try data.write(to: stateFileURL, options: .atomic)
-        } catch {
-            throw AtlasWorkspaceRepositoryError.writeFailed(error.localizedDescription)
-        }
-
-        return normalizedState
-    }
-
-    public func loadScaffoldSnapshot() -> AtlasWorkspaceSnapshot {
-        loadState().snapshot
-    }
-
-    public func loadCurrentPlan() -> ActionPlan {
-        loadState().currentPlan
-    }
-
-    public func loadSettings() -> AtlasSettings {
-        loadState().settings
-    }
-
-    private func reportFailure(_ error: Error, operation: String) {
-        let message = "[AtlasWorkspaceRepository] Failed to \(operation): \(error.localizedDescription)\n"
-        if let data = message.data(using: .utf8) {
-            try? FileHandle.standardError.write(contentsOf: data)
-        }
-    }
-
-    private func normalizedState(_ state: AtlasWorkspaceState) -> AtlasWorkspaceState {
-        var normalized = state
-        let now = nowProvider()
-        normalized.snapshot.recoveryItems.removeAll { item in
-            item.isExpired(asOf: now)
-        }
-        return normalized
-    }
-
-    private func decodePersistedState(from data: Data, using decoder: JSONDecoder) throws -> (state: AtlasWorkspaceState, usedLegacyShape: Bool) {
-        if let persisted = try? decoder.decode(AtlasPersistedWorkspaceState.self, from: data) {
-            return (persisted.workspaceState, false)
-        }
-
-        return (try decoder.decode(AtlasWorkspaceState.self, from: data), true)
+            // An envelope with a future/invalid version must never fall back to legacy decoding.
+            if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], object["schemaVersion"] != nil {
+                let envelope = try decoder.decode(AtlasPersistedWorkspaceState.self, from: data)
+                guard [1, AtlasWorkspaceStateSchemaVersion.current].contains(envelope.schemaVersion) else { throw AtlasJournalError.corrupt }
+                return (envelope.workspaceState, envelope.schemaVersion == 1)
+            }
+            return (try decoder.decode(AtlasWorkspaceState.self, from: data), true)
+        } catch { throw AtlasWorkspaceRepositoryError.decodeFailed(String(describing: error)) }
     }
 
     private static var defaultStateFileURL: URL {
+        #if DEBUG
         if let explicit = ProcessInfo.processInfo.environment["ATLAS_STATE_FILE"], !explicit.isEmpty {
             return URL(fileURLWithPath: explicit)
         }
 
-        let baseDirectory: URL
+        #endif
+        #if DEBUG
         if let explicitDirectory = ProcessInfo.processInfo.environment["ATLAS_STATE_DIR"], !explicitDirectory.isEmpty {
-            baseDirectory = URL(fileURLWithPath: explicitDirectory, isDirectory: true)
-        } else {
-            let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-                ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support", isDirectory: true)
-            baseDirectory = applicationSupport.appendingPathComponent("AtlasForMac", isDirectory: true)
+            return URL(fileURLWithPath: explicitDirectory, isDirectory: true).appendingPathComponent("workspace-state.json")
         }
-
-        return baseDirectory.appendingPathComponent("workspace-state.json")
+        #endif
+        let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support", isDirectory: true)
+        return applicationSupport.appendingPathComponent("AtlasForMac", isDirectory: true).appendingPathComponent("workspace-state.json")
     }
 }

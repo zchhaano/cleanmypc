@@ -80,13 +80,12 @@ public struct AtlasPermissionInspector: Sendable {
         // packaged builds (xcodebuild) are unaffected.
         guard Bundle.main.bundleIdentifier != nil else { return false }
 
-        let settings = await withCheckedContinuation { continuation in
+        return await withCheckedContinuation { continuation in
             UNUserNotificationCenter.current().getNotificationSettings { settings in
-                continuation.resume(returning: settings)
+                let granted = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+                continuation.resume(returning: granted)
             }
         }
-
-        return settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
     }
 
     private func fullDiskAccessState() -> PermissionState {

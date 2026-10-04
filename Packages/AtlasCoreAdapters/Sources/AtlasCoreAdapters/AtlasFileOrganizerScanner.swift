@@ -35,24 +35,28 @@ public struct AtlasFileOrganizerScanner: AtlasFileOrganizerScanning, Sendable {
             let baseURL = try AtlasFileSafetyPolicy.expanded(folderPath, homeDirectoryURL: homeDirectoryURL)
             _ = try AtlasFileSafetyPolicy.validateOrganizerRoot(baseURL, homeDirectoryURL: homeDirectoryURL)
             let expandedPath = baseURL.path
+            var enumerationError: Error?
             guard let enumerator = fm.enumerator(
                 at: baseURL,
                 includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey],
-                options: enumeratorOptions
+                options: enumeratorOptions,
+                errorHandler: { _, error in enumerationError = error; return false }
             ) else { throw AtlasFileSafetyError.unsafePath(baseURL.path) }
 
             for case let url as URL in enumerator {
                 if AtlasFileIdentityReader.hasPackageAncestor(url) { enumerator.skipDescendants(); continue }
-                guard (try? AtlasFileIdentityReader.read(url)) != nil else { enumerator.skipDescendants(); continue }
+                let metadata = try url.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey, .isDirectoryKey, .fileSizeKey])
+                if metadata.isSymbolicLink == true { enumerator.skipDescendants(); continue }
+                _ = try AtlasFileIdentityReader.read(url)
                 // Skip symlinks pointing outside the scanned directory
                 let resolvedPath = url.resolvingSymlinksInPath().path
                 guard resolvedPath.hasPrefix(expandedPath + "/") || resolvedPath == expandedPath else {
                     continue
                 }
 
-                let resourceValues = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+                let resourceValues = metadata
 
-                if let isDir = resourceValues?.isDirectory, isDir {
+                if let isDir = resourceValues.isDirectory, isDir {
                     continue
                 }
 
@@ -63,7 +67,7 @@ public struct AtlasFileOrganizerScanner: AtlasFileOrganizerScanning, Sendable {
 
                 let fileName = url.lastPathComponent
 
-                let bytes: Int64 = Int64(resourceValues?.fileSize ?? 0)
+                let bytes: Int64 = Int64(resourceValues.fileSize ?? 0)
 
                 let ext = url.pathExtension.lowercased()
                 let category = Self.classifyExtension(ext)
@@ -93,6 +97,7 @@ public struct AtlasFileOrganizerScanner: AtlasFileOrganizerScanning, Sendable {
                     proposedDestination: proposedDestination
                 ))
             }
+            if let enumerationError { throw enumerationError }
         }
 
         let categoryCounts = Dictionary(grouping: entries, by: \.category).mapValues(\.count)

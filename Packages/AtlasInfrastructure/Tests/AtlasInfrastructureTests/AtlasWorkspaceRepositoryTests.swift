@@ -24,10 +24,10 @@ final class AtlasWorkspaceRepositoryTests: XCTestCase {
 
     // MARK: - Load State Seeds Empty
 
-    func testLoadStateSeedsWhenNoFileExists() {
+    func testLoadStateSeedsWhenNoFileExists() throws {
         let repo = AtlasWorkspaceRepository(stateFileURL: stateFileURL())
-        let state = repo.loadState()
-        XCTAssertFalse(state.snapshot.findings.isEmpty, "Seeded state should have fixture findings")
+        let state = try repo.loadState()
+        XCTAssertTrue(state.snapshot.findings.isEmpty, "Production starts empty")
     }
 
     // MARK: - Save and Load Roundtrip
@@ -35,39 +35,39 @@ final class AtlasWorkspaceRepositoryTests: XCTestCase {
     func testSaveAndLoadRoundtrip() throws {
         let url = stateFileURL()
         let repo = AtlasWorkspaceRepository(stateFileURL: url)
-        let original = repo.loadState()
+        let original = try repo.loadState()
 
         var modified = original
         modified.settings.notificationsEnabled = true
         _ = try repo.saveState(modified)
 
-        let loaded = repo.loadState()
+        let loaded = try repo.loadState()
         XCTAssertTrue(loaded.settings.notificationsEnabled)
     }
 
     // MARK: - Convenience Accessors
 
-    func testLoadScaffoldSnapshot() {
+    func testLoadScaffoldSnapshot() throws {
         let repo = AtlasWorkspaceRepository(stateFileURL: stateFileURL())
-        let snapshot = repo.loadScaffoldSnapshot()
-        XCTAssertFalse(snapshot.findings.isEmpty)
+        let snapshot = try repo.loadScaffoldSnapshot()
+        XCTAssertTrue(snapshot.findings.isEmpty)
     }
 
-    func testLoadCurrentPlan() {
+    func testLoadCurrentPlan() throws {
         let repo = AtlasWorkspaceRepository(stateFileURL: stateFileURL())
-        let plan = repo.loadCurrentPlan()
+        let plan = try repo.loadCurrentPlan()
         XCTAssertNotNil(plan)
     }
 
-    func testLoadSettings() {
+    func testLoadSettings() throws {
         let repo = AtlasWorkspaceRepository(stateFileURL: stateFileURL())
-        let settings = repo.loadSettings()
+        let settings = try repo.loadSettings()
         XCTAssertNotNil(settings)
     }
 
     // MARK: - Error Descriptions
 
-    func testRepositoryErrorDescriptions() {
+    func testRepositoryErrorDescriptions() throws {
         let errors: [AtlasWorkspaceRepositoryError] = [
             .readFailed("test"),
             .decodeFailed("test"),
@@ -81,7 +81,7 @@ final class AtlasWorkspaceRepositoryTests: XCTestCase {
         }
     }
 
-    func testRepositoryErrorEquality() {
+    func testRepositoryErrorEquality() throws {
         XCTAssertEqual(AtlasWorkspaceRepositoryError.readFailed("a"), .readFailed("a"))
         XCTAssertNotEqual(AtlasWorkspaceRepositoryError.readFailed("a"), .readFailed("b"))
         XCTAssertNotEqual(AtlasWorkspaceRepositoryError.readFailed("a"), .decodeFailed("a"))
@@ -94,7 +94,7 @@ final class AtlasWorkspaceRepositoryTests: XCTestCase {
         let fixedNow = Date()
         let repo = AtlasWorkspaceRepository(stateFileURL: url, nowProvider: { fixedNow })
 
-        let state = repo.loadState()
+        let state = try repo.loadState()
         var modified = state
         let expiredItem = RecoveryItem(
             title: "Expired",
@@ -107,8 +107,8 @@ final class AtlasWorkspaceRepositoryTests: XCTestCase {
         modified.snapshot.recoveryItems.append(expiredItem)
         _ = try repo.saveState(modified)
 
-        let loaded = repo.loadState()
-        XCTAssertFalse(loaded.snapshot.recoveryItems.contains(where: { $0.id == expiredItem.id }),
-                       "Expired recovery item should be cleaned on load")
+        let loaded = try repo.loadState()
+        XCTAssertTrue(loaded.snapshot.recoveryItems.contains(where: { $0.id == expiredItem.id }),
+                       "Expired evidence is retained on load")
     }
 }

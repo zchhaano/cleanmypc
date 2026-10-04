@@ -171,7 +171,10 @@ final class AtlasAppModel: ObservableObject {
         ledgerNumberStore: (any AtlasLedgerNumberStoring)? = nil,
         userDefaults: UserDefaults? = nil
     ) {
-        let state = repository.loadState()
+        let state: AtlasWorkspaceState
+        let loadFailure: String?
+        do { state = try repository.loadState(); loadFailure = nil }
+        catch { state = .empty; loadFailure = error.localizedDescription }
         self.repository = repository
         self.ledgerNumberStore = ledgerNumberStore ?? AtlasUserDefaultsLedgerNumberStore()
         self.userDefaults = userDefaults ?? Self.defaultUserDefaults
@@ -227,7 +230,9 @@ final class AtlasAppModel: ObservableObject {
                 self?.objectWillChange.send()
             }
         syncAppearance()
-        surfaceExpiredRecoveryPruneIfNeeded()
+        if let loadFailure {
+            recordPlan(.ledger, kind: .failed, message: AtlasL10n.string("security.state.unavailable", loadFailure))
+        } else { surfaceExpiredRecoveryPruneIfNeeded() }
         #if DEBUG
         applyUITestFixtureIfNeeded()
         #endif
@@ -300,7 +305,7 @@ final class AtlasAppModel: ObservableObject {
                 recordPlan(
                     .ledger,
                     kind: .advisory,
-                    message: AtlasL10n.string("ledger.prune.notice.message", disappeared.count)
+                    message: AtlasL10n.string("security.recovery.recordsChanged", disappeared.count)
                 )
             }
         }
@@ -316,6 +321,13 @@ final class AtlasAppModel: ObservableObject {
             applyReceiptNoRecoveryFixture()
         case "review-executable":
             applyReviewExecutableFixture()
+        case "recovery-source-missing":
+            let id = UUID(uuidString: "00000000-0000-0000-0000-000000000099")!
+            snapshot.recoveryItems = [RecoveryItem(id: id, title: "Missing source", detail: AtlasL10n.string("security.recovery.sourceMissing"),
+                originalPath: "/missing/original", bytes: 1, deletedAt: Date(),
+                restoreMappings: [.init(originalPath: "/missing/original", trashedPath: "/missing/trash", operationID: id)],
+                recoveryAvailability: .sourceMissing)]
+            _ = try? repository.saveState(AtlasWorkspaceState(snapshot: snapshot, currentPlan: currentPlan, settings: settings))
         case "taskcenter-many-runs":
             break   // 内容由 `taskCenterTaskRuns` 在读取侧施加
         default:
@@ -496,6 +508,7 @@ final class AtlasAppModel: ObservableObject {
                 updateCheckError = error.localizedDescription
             }
         } catch {
+            retainSnapshot(from: error)
             withAnimation(.snappy(duration: 0.24)) {
                 latestUpdateResult = nil
             }
@@ -579,7 +592,7 @@ final class AtlasAppModel: ObservableObject {
     }
 
     var canExecuteCurrentSmartCleanPlan: Bool {
-        !currentPlan.items.isEmpty && isCurrentSmartCleanPlanFresh && currentSmartCleanPlanHasExecutableTargets
+        AtlasSafetyCapabilities.fileMutationsEnabled && !currentPlan.items.isEmpty && isCurrentSmartCleanPlanFresh && currentSmartCleanPlanHasExecutableTargets
     }
 
     var currentSmartCleanPlanHasExecutableTargets: Bool {
@@ -591,7 +604,7 @@ final class AtlasAppModel: ObservableObject {
     }
 
     var canExecuteFileOrganizerPlan: Bool {
-        !currentFileOrganizerPlan.items.isEmpty && isFileOrganizerPlanFresh
+        AtlasSafetyCapabilities.fileMutationsEnabled && !currentFileOrganizerPlan.items.isEmpty && isFileOrganizerPlanFresh
     }
 
     func refreshHealthSnapshotIfNeeded() async {
@@ -625,6 +638,7 @@ final class AtlasAppModel: ObservableObject {
                 snapshot = output.snapshot
             }
         } catch {
+            retainSnapshot(from: error)
             latestScanSummary = error.localizedDescription
         }
 
@@ -652,6 +666,7 @@ final class AtlasAppModel: ObservableObject {
                 output.snapshot.permissions.count
             )
         } catch {
+            retainSnapshot(from: error)
             // `CT-07`：`.permissions` 此前**零生产零读取** —— 权限巡检失败只写进
             // `latestPermissionsSummary`（不带 source 标识的状态行），与 `P0-1`
             // 的根因同类：**失败信息挂在一个谁都可以覆盖的摘要串上**。
@@ -731,6 +746,7 @@ final class AtlasAppModel: ObservableObject {
                 }
             }
         } catch {
+            retainSnapshot(from: error)
             latestScanSummary = error.localizedDescription
             latestScanProgress = 0
             recordPlan(.smartClean, kind: .failed, message: error.localizedDescription)
@@ -768,6 +784,7 @@ final class AtlasAppModel: ObservableObject {
             }
             return true
         } catch {
+            retainSnapshot(from: error)
             latestScanSummary = error.localizedDescription
             recordPlan(.smartClean, kind: .failed, message: error.localizedDescription)
             return false
@@ -828,6 +845,7 @@ final class AtlasAppModel: ObservableObject {
                 isCurrentSmartCleanPlanFresh = false
             }
         } catch {
+            retainSnapshot(from: error)
             latestScanSummary = error.localizedDescription
             recordExecution(.smartClean, kind: .failed, message: error.localizedDescription)
             // Partial-completion receipt (③ error → 「查看回执」, spec §2.3):
@@ -978,6 +996,7 @@ final class AtlasAppModel: ObservableObject {
                 latestAppsSummary = output.summary
             }
         } catch {
+            retainSnapshot(from: error)
             latestAppsSummary = error.localizedDescription
         }
 
@@ -1012,6 +1031,7 @@ final class AtlasAppModel: ObservableObject {
                 }
             }
         } catch {
+            retainSnapshot(from: error)
             latestAppsSummary = error.localizedDescription
         }
 
@@ -1039,6 +1059,7 @@ final class AtlasAppModel: ObservableObject {
                 latestAppsSummary = output.summary
             }
         } catch {
+            retainSnapshot(from: error)
             latestAppsSummary = error.localizedDescription
         }
 
@@ -1265,12 +1286,13 @@ final class AtlasAppModel: ObservableObject {
                 await refreshPlanPreview()
             }
         } catch {
+            retainSnapshot(from: error)
             // Clear transient restore state to prevent stale data from leaking
             // into the next refreshApps() call, which would produce false divergence.
             pendingRestoreSnapshotCategoryCounts = nil
             latestAppRestoreRefreshStatus = nil
 
-            let persistedState = repository.loadState()
+            let persistedState = (try? repository.loadState()) ?? .empty
             withAnimation(.snappy(duration: 0.24)) {
                 snapshot = persistedState.snapshot
                 currentPlan = persistedState.currentPlan
@@ -1511,6 +1533,7 @@ final class AtlasAppModel: ObservableObject {
             }
             syncAppearance()
         } catch {
+            retainSnapshot(from: error)
             latestAppsSummary = error.localizedDescription
         }
     }
@@ -1610,6 +1633,7 @@ final class AtlasAppModel: ObservableObject {
                 clearPlan(.fileOrganizer)
             }
         } catch {
+            retainSnapshot(from: error)
             fileOrganizerScanSummary = error.localizedDescription
             fileOrganizerProgress = 0
             // `P2-8`：权限受限**不是**「文件整理未能完成」。未授权时保持 `.advisory`
@@ -1655,8 +1679,8 @@ final class AtlasAppModel: ObservableObject {
         // worker is moving against. The new rules take effect on the next
         // scan/preview.
         guard !isFileOrganizerExecuting else { return }
-        await classifyFileOrganizerEntries(entryIDs: [])
-        await refreshFileOrganizerPreview(entryIDs: [])
+        await classifyFileOrganizerEntries(entryIDs: fileOrganizerEntries.map(\.id))
+        await refreshFileOrganizerPreview(entryIDs: fileOrganizerEntries.map(\.id))
     }
 
     func classifyFileOrganizerEntries(entryIDs: [UUID]) async {
@@ -1673,6 +1697,7 @@ final class AtlasAppModel: ObservableObject {
                 fileOrganizerScanSummary = output.summary
             }
         } catch {
+            retainSnapshot(from: error)
             fileOrganizerScanSummary = error.localizedDescription
         }
 
@@ -1708,6 +1733,7 @@ final class AtlasAppModel: ObservableObject {
                 }
             }
         } catch {
+            retainSnapshot(from: error)
             fileOrganizerScanSummary = error.localizedDescription
             recordPlan(.fileOrganizer, kind: .failed, message: error.localizedDescription)
         }
@@ -1794,30 +1820,17 @@ final class AtlasAppModel: ObservableObject {
                 fileOrganizerScanSummary = AtlasL10n.string("model.fileorganizer.ready")
             }
         } catch {
-            // Worker may have partially succeeded — verify files actually returned to original locations
-            let allRestored = recoveryItem.restoreMappings?.allSatisfy { mapping in
-                let restored = FileManager.default.fileExists(atPath: (mapping.originalPath as NSString).expandingTildeInPath)
-                let sourceGone = !FileManager.default.fileExists(atPath: (mapping.trashedPath as NSString).expandingTildeInPath)
-                return restored && sourceGone
-            } ?? false
-            if allRestored {
-                withAnimation(.snappy(duration: 0.24)) {
-                    snapshot.recoveryItems.removeAll { $0.id == recoveryItem.id }
-                    snapshot.fileOrganizerEntries = []
-                    fileOrganizerEntries = []
-                    currentFileOrganizerPlan = ActionPlan(title: "", items: [], estimatedBytes: 0)
-                    isFileOrganizerPlanFresh = false
-                    fileOrganizerHasPreviewResults = false
-                    fileOrganizerExecutionCompleted = false
-                    fileOrganizerMovedCount = 0
-                    fileOrganizerExecutionReceipt = nil
-                    fileOrganizerScanSummary = AtlasL10n.string("model.fileorganizer.ready")
-                }
-            } else {
-                recordExecution(.fileOrganizer, kind: .failed, message: error.localizedDescription)
-            }
+            retainSnapshot(from: error)
+            recordExecution(.fileOrganizer, kind: .failed, message: error.localizedDescription)
         }
         restoringRecoveryItemID = nil
+    }
+
+    private func retainSnapshot(from error: Error) {
+        if case let AtlasWorkspaceControllerError.rejected(_, _, retained) = error, let retained {
+            snapshot = retained
+            fileOrganizerEntries = retained.fileOrganizerEntries
+        }
     }
 
     func executeFileOrganizerPlan() async {
@@ -1875,6 +1888,7 @@ final class AtlasAppModel: ObservableObject {
                 }
             }
         } catch {
+            retainSnapshot(from: error)
             fileOrganizerScanSummary = error.localizedDescription
             recordExecution(.fileOrganizer, kind: .failed, message: error.localizedDescription)
             // Partial-completion receipt (spec §2.3 ④ error → 「查看回执」):
@@ -1920,6 +1934,7 @@ final class AtlasAppModel: ObservableObject {
             )
             showToast(msg, tone: .success, systemImage: "checkmark.circle")
         } catch {
+            retainSnapshot(from: error)
             showToast(
                 AtlasL10n.string("fileorganizer.dryRun.error", error.localizedDescription),
                 tone: .danger,
@@ -1961,6 +1976,7 @@ final class AtlasAppModel: ObservableObject {
                 )
             }
         } catch {
+            retainSnapshot(from: error)
             latestAppsSummary = error.localizedDescription
             // Clear stale snapshot counts — the refresh failed so we can't compare
             pendingRestoreSnapshotCategoryCounts = nil

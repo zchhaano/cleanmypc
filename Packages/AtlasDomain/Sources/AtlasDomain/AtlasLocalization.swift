@@ -49,18 +49,21 @@ public enum AtlasTheme: String, CaseIterable, Codable, Hashable, Sendable, Ident
 }
 
 public enum AtlasL10n {
-    private static let stateLock = NSLock()
-    private static var storedLanguage: AtlasLanguage = .default
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var language: AtlasLanguage = .default
+    }
+    private static let state = State()
 
     public static var currentLanguage: AtlasLanguage {
-        stateLock.withLock {
-            storedLanguage
+        state.lock.withLock {
+            state.language
         }
     }
 
     public static func setCurrentLanguage(_ language: AtlasLanguage) {
-        stateLock.withLock {
-            storedLanguage = language
+        state.lock.withLock {
+            state.language = language
         }
     }
 

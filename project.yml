@@ -8,6 +8,12 @@ settings:
   base:
     SWIFT_VERSION: 6.0
     MACOSX_DEPLOYMENT_TARGET: "14.0"
+  configs:
+    Debug:
+      ONLY_ACTIVE_ARCH: YES
+      ENABLE_TESTABILITY: YES
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+      SWIFT_OPTIMIZATION_LEVEL: -Onone
 packages:
   Packages:
     path: Packages
@@ -115,6 +121,8 @@ targets:
       - path: Apps/AtlasApp/Tests/AtlasAppTests
     settings:
       base:
+        PRODUCT_NAME: AtlasAppTests
+        PRODUCT_MODULE_NAME: AtlasAppTests
         PRODUCT_BUNDLE_IDENTIFIER: com.atlasformac.app.tests
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Atlas for Mac.app/Contents/MacOS/Atlas for Mac"
@@ -130,6 +138,8 @@ targets:
       - path: Apps/AtlasAppUITests
     settings:
       base:
+        PRODUCT_NAME: AtlasAppUITests
+        PRODUCT_MODULE_NAME: AtlasAppUITests
         PRODUCT_BUNDLE_IDENTIFIER: com.atlasformac.app.uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: AtlasApp

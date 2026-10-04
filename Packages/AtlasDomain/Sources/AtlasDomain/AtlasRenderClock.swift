@@ -28,21 +28,24 @@ import Foundation
 ///
 /// 借了进程级状态就要还 —— 设了 `setFixedInstant` 的一方必须负责还原（用 `defer`）。
 public enum AtlasRenderClock {
-    private static let stateLock = NSLock()
-    private static var storedInstant: Date?
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var instant: Date?
+    }
+    private static let state = State()
 
     /// 当前的「现在」。未被钉死时返回真实时间。
     public static var now: Date {
-        stateLock.withLock { storedInstant ?? Date() }
+        state.lock.withLock { state.instant ?? Date() }
     }
 
     /// 是否已被钉死（供测试与导出器自检）。
     public static var isPinned: Bool {
-        stateLock.withLock { storedInstant != nil }
+        state.lock.withLock { state.instant != nil }
     }
 
     /// 把「现在」钉死在 `instant`；传 `nil` 恢复跟随真实时间。
     public static func setFixedInstant(_ instant: Date?) {
-        stateLock.withLock { storedInstant = instant }
+        state.lock.withLock { state.instant = instant }
     }
 }

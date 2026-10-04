@@ -27,6 +27,15 @@ final class AtlasProcessRunnerTests: XCTestCase {
         do { _ = try await shell("printf 123456789 >&2", stderrLimit: 8); XCTFail("limit") }
         catch { XCTAssertEqual(error as? AtlasProcessError, .outputLimitExceeded("stderr")) }
     }
+    func testDefaultStreamBudgetsAndPrelaunchCancellation() async throws {
+        do { _ = try await shell("head -c 8388609 /dev/zero"); XCTFail("stdout budget") }
+        catch { XCTAssertEqual(error as? AtlasProcessError, .outputLimitExceeded("stdout")) }
+        do { _ = try await shell("head -c 1048577 /dev/zero >&2"); XCTFail("stderr budget") }
+        catch { XCTAssertEqual(error as? AtlasProcessError, .outputLimitExceeded("stderr")) }
+        let task = Task { try await self.shell("exit 0") }; task.cancel()
+        do { _ = try await task.value; XCTFail("cancel before launch") }
+        catch { XCTAssertEqual(error as? AtlasProcessError, .cancelled) }
+    }
     func testCancellationStopsOwnedGroup() async {
         let task = Task { try await self.shell("trap '' TERM; sleep 10") }
         try? await Task.sleep(for: .milliseconds(50)); task.cancel()

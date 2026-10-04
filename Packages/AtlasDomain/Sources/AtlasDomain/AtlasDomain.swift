@@ -831,7 +831,7 @@ public struct AtlasAppPostRestoreRefreshStatus: Hashable, Sendable {
 }
 
 public enum AtlasRecoveryPayloadSchemaVersion {
-    public static let current = 1
+    public static let current = 2
 }
 
 public struct AtlasAppRecoveryPayload: Codable, Hashable, Sendable {
@@ -957,7 +957,11 @@ public struct RecoveryPathMapping: Codable, Hashable, Sendable {
     public var originalPath: String
     public var trashedPath: String
 
-    public init(originalPath: String, trashedPath: String) {
+    public var operationID: UUID?
+    public var sourceIdentity: AtlasFileIdentity?
+    public var trashedIdentity: AtlasFileIdentity?
+    public init(originalPath: String, trashedPath: String, operationID: UUID? = nil, sourceIdentity: AtlasFileIdentity? = nil, trashedIdentity: AtlasFileIdentity? = nil) {
+        self.operationID = operationID; self.sourceIdentity = sourceIdentity; self.trashedIdentity = trashedIdentity
         self.originalPath = originalPath
         self.trashedPath = trashedPath
     }
@@ -972,6 +976,7 @@ public struct RecoveryItem: Identifiable, Codable, Hashable, Sendable {
     public var deletedAt: Date
     public var expiresAt: Date?
     public var payload: RecoveryPayload?
+    public var recoveryAvailability: AtlasRecoveryAvailability?
     public var restoreMappings: [RecoveryPathMapping]?
 
     public init(
@@ -983,8 +988,10 @@ public struct RecoveryItem: Identifiable, Codable, Hashable, Sendable {
         deletedAt: Date,
         expiresAt: Date? = nil,
         payload: RecoveryPayload? = nil,
-        restoreMappings: [RecoveryPathMapping]? = nil
+        restoreMappings: [RecoveryPathMapping]? = nil,
+        recoveryAvailability: AtlasRecoveryAvailability? = nil
     ) {
+        self.recoveryAvailability = recoveryAvailability
         self.id = id
         self.title = title
         self.detail = detail

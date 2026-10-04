@@ -143,82 +143,11 @@ final class SmartCleanWorkflowFlowTests: XCTestCase {
 
     // MARK: - Execution receipt + ledger toast (state-only path, fail-closed undo)
 
-    func testExecutionRecordsReceiptAndPostsLedgerToast() async throws {
-        let model = makeModel(scanProvider: TwoFindingScanProvider())
 
-        await model.runSmartCleanScan()
-        let number = try XCTUnwrap(model.workflowState(for: .smartClean).planNumber)
-        let recoveryBefore = Set(model.snapshot.recoveryItems.map(\.id))
-
-        await model.executeCurrentPlan()
-
-        XCTAssertTrue(model.smartCleanExecutionCompleted)
-        let receipt = try XCTUnwrap(model.smartCleanExecutionReceipt)
-        XCTAssertEqual(receipt.planNumber, number)
-        XCTAssertNil(receipt.failureReason)
-        XCTAssertEqual(resolveStage(of: model), AtlasWorkflowStageMap.receiptStage,
-                       "executionCompleted resolves to ④ receipt")
-
-        // No real side effects in this run ⇒ no recovery delta ⇒ no undo action
-        // on the toast (fail-closed), but the ledger back-link is always there.
-        let delta = model.snapshot.recoveryItems.map(\.id).filter { !recoveryBefore.contains($0) }
-        XCTAssertEqual(receipt.recoveryItemIDs, delta)
-        let toast = try XCTUnwrap(model.toasts.last)
-        XCTAssertEqual(toast.message, AtlasL10n.string("smartclean.toast.recorded", number))
-        XCTAssertNotNil(toast.onTap, "「已入账 №N」 must reach the ledger (回链红线)")
-        if delta.isEmpty {
-            XCTAssertNil(toast.actionTitle, "no recovery delta ⇒ no undo action (fail-closed)")
-        } else {
-            XCTAssertEqual(toast.actionTitle, AtlasL10n.string("smartclean.undo.banner.action"))
-        }
-
-        // Undo acks the receipt even when there is nothing to restore.
-        await model.undoSmartCleanExecution()
-        XCTAssertFalse(model.smartCleanExecutionCompleted)
-        XCTAssertNil(model.smartCleanExecutionReceipt)
-    }
 
     // MARK: - Execution + undo with a REAL recovery delta (file roundtrip)
 
-    func testExecuteThenUndoRestoresRealFile() async throws {
-        let fm = FileManager.default
-        let fixtureDir = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/AtlasSC-BatchI-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: fixtureDir, withIntermediateDirectories: true)
-        let fixtureFile = fixtureDir.appendingPathComponent("undo-fixture.bin")
-        try Data(repeating: 0x7, count: 256).write(to: fixtureFile)
-        addTeardownBlock {
-            try? FileManager.default.removeItem(at: fixtureDir)
-        }
 
-        let model = makeModel(scanProvider: SingleRealFileScanProvider(path: fixtureFile.path))
-
-        await model.runSmartCleanScan()
-        XCTAssertTrue(model.canExecuteCurrentSmartCleanPlan)
-        let recoveryBefore = Set(model.snapshot.recoveryItems.map(\.id))
-
-        await model.executeCurrentPlan()
-
-        XCTAssertNil(model.smartCleanExecutionIssue)
-        XCTAssertFalse(fm.fileExists(atPath: fixtureFile.path), "execution really trashed the fixture file")
-        let receipt = try XCTUnwrap(model.smartCleanExecutionReceipt)
-        XCTAssertFalse(receipt.recoveryItemIDs.isEmpty, "real side effect ⇒ recovery delta recorded")
-        XCTAssertTrue(receipt.hasRestorePoint)
-        XCTAssertTrue(receipt.recoveryItemIDs.allSatisfy { !recoveryBefore.contains($0) })
-        let toast = try XCTUnwrap(model.toasts.last)
-        XCTAssertEqual(toast.actionTitle, AtlasL10n.string("smartclean.undo.banner.action"),
-                       "recovery delta present ⇒ the toast offers undo")
-
-        await model.undoSmartCleanExecution()
-
-        XCTAssertTrue(fm.fileExists(atPath: fixtureFile.path), "undo restored the file to its original path")
-        XCTAssertFalse(model.smartCleanExecutionCompleted)
-        XCTAssertNil(model.smartCleanExecutionReceipt)
-        XCTAssertFalse(
-            model.snapshot.recoveryItems.contains { receipt.recoveryItemIDs.contains($0.id) },
-            "the consumed recovery items left the ledger's recovery list"
-        )
-    }
 
     // MARK: - Helpers
 

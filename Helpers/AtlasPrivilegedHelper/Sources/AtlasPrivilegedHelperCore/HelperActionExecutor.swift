@@ -1,180 +1,64 @@
+import AtlasDomain
+import AtlasFileSafety
+import AtlasInfrastructure
 import AtlasProtocol
 import Foundation
 import Darwin
 
 public struct AtlasPrivilegedHelperActionExecutor {
-    private let fileManager: FileManager
-    private let allowedRoots: [String]
-    private let currentUserID: UInt32
-    private let currentGroupID: UInt32
     private let homeDirectoryURL: URL
-
-    public init(
-        fileManager: FileManager = .default,
-        allowedRoots: [String]? = nil,
-        currentUserID: UInt32 = getuid(),
-        currentGroupID: UInt32 = getgid(),
-        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
-    ) {
-        self.fileManager = fileManager
-        self.currentUserID = currentUserID
-        self.currentGroupID = currentGroupID
+    private let evidenceDirectoryURL: URL
+    public init(fileManager: FileManager = .default, allowedRoots: [String]? = nil,
+        currentUserID: UInt32 = getuid(), currentGroupID: UInt32 = getgid(),
+        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser, evidenceDirectoryURL: URL? = nil) {
         self.homeDirectoryURL = homeDirectoryURL
-        self.allowedRoots = allowedRoots ?? [
-            URL(fileURLWithPath: "/Applications", isDirectory: true).path,
-            homeDirectoryURL.appendingPathComponent("Applications", isDirectory: true).path,
-            homeDirectoryURL.appendingPathComponent("Library/LaunchAgents", isDirectory: true).path,
-            URL(fileURLWithPath: "/Library/LaunchAgents", isDirectory: true).path,
-            URL(fileURLWithPath: "/Library/LaunchDaemons", isDirectory: true).path,
-        ]
+        self.evidenceDirectoryURL = evidenceDirectoryURL ?? homeDirectoryURL.appendingPathComponent("Library/Application Support/AtlasForMac")
     }
-
-    public func perform(_ action: AtlasHelperAction) throws -> AtlasHelperActionResult {
-        guard action.kind != .removeLaunchService && action.kind != .repairOwnership else { throw HelperValidationError.pathNotAllowed(action.targetPath) }
-        let targetURL = URL(fileURLWithPath: action.targetPath).resolvingSymlinksInPath()
-        let destinationURL = action.destinationPath.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath() }
-        try validate(action: action, targetURL: targetURL, destinationURL: destinationURL)
-
-        switch action.kind {
-        case .trashItems:
-            var trashedURL: NSURL?
-            try fileManager.trashItem(at: targetURL, resultingItemURL: &trashedURL)
-            return AtlasHelperActionResult(
-                action: action,
-                success: true,
-                message: "Moved item to Trash.",
-                resolvedPath: (trashedURL as URL?)?.path
-            )
-        case .restoreItem:
-            guard let destinationURL else {
-                throw HelperValidationError.invalidRestoreDestination(nil)
-            }
-            try fileManager.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fileManager.moveItem(at: targetURL, to: destinationURL)
-            return AtlasHelperActionResult(
-                action: action,
-                success: true,
-                message: "Restored item from Trash.",
-                resolvedPath: destinationURL.path
-            )
-        case .removeLaunchService:
-            try fileManager.removeItem(at: targetURL)
-            return AtlasHelperActionResult(
-                action: action,
-                success: true,
-                message: "Removed launch service file.",
-                resolvedPath: targetURL.path
-            )
-        case .repairOwnership:
-            return try repairOwnership(for: action, targetURL: targetURL)
+    public func validateEvidence(_ action: AtlasHelperAction) throws -> AtlasValidatedFileOperation {
+        guard getuid() != 0, action.kind == .trashItems || action.kind == .restoreItem,
+              let operationID = action.operationID, let planID = action.planID,
+              let digest = action.planDigest, action.policyRevision == 1, let expected = action.expectedIdentity else {
+            throw HelperValidationError.pathNotAllowed(action.targetPath)
         }
-    }
-
-    private func repairOwnership(for action: AtlasHelperAction, targetURL: URL) throws -> AtlasHelperActionResult {
-        let targets = try ownershipTargets(for: targetURL)
-        var updatedCount = 0
-        var failedPaths: [String] = []
-
-        for url in targets {
-            do {
-                let attributes = try fileManager.attributesOfItem(atPath: url.path)
-                let ownerID = attributes[.ownerAccountID] as? NSNumber
-                let groupID = attributes[.groupOwnerAccountID] as? NSNumber
-                let alreadyOwned = ownerID?.uint32Value == currentUserID && groupID?.uint32Value == currentGroupID
-
-                if !alreadyOwned {
-                    try fileManager.setAttributes([
-                        .ownerAccountID: NSNumber(value: currentUserID),
-                        .groupOwnerAccountID: NSNumber(value: currentGroupID),
-                    ], ofItemAtPath: url.path)
-                    updatedCount += 1
-                }
-            } catch {
-                failedPaths.append(url.path)
-            }
+        let plan = try AtlasActionPlanRegistry.readPersistedPlan(directoryURL: evidenceDirectoryURL, id: planID)
+        guard plan.digest == digest,
+              let record = try AtlasOperationJournal(directoryURL: evidenceDirectoryURL).replay().last(where: { $0.operationID == operationID }),
+              record.planID == planID, record.planDigest == digest,
+              let intent = plan.operations.first(where: { $0.entryID == record.entryID }),
+              intent.sourcePath == record.sourcePath, intent.expectedIdentity == record.sourceIdentity else {
+            throw HelperValidationError.pathNotAllowed(action.targetPath)
         }
-
-        if !failedPaths.isEmpty {
-            throw HelperValidationError.repairOwnershipFailed(failedPaths)
-        }
-
-        let message: String
-        if updatedCount == 0 {
-            message = "Ownership already matched the current user."
+        let operation: AtlasFileOperationIntent
+        let context: AtlasFilePolicyContext
+        if action.kind == .trashItems {
+            guard record.state == .planned, action.targetPath == intent.sourcePath,
+                  action.destinationPath == nil, expected == intent.expectedIdentity,
+                  intent.kind == .uninstall || intent.kind == .smartClean else { throw HelperValidationError.pathNotAllowed(action.targetPath) }
+            operation = intent
+            context = .init(homeDirectoryURL: homeDirectoryURL,
+                allowedApplicationPaths: intent.kind == .uninstall ? [intent.sourcePath] : [])
         } else {
-            message = "Repaired ownership for \(updatedCount) item\(updatedCount == 1 ? "" : "s")."
+            guard record.state == .restorePlanned, action.targetPath == record.destinationPath,
+                  action.destinationPath == record.sourcePath, expected == record.destinationIdentity else { throw HelperValidationError.pathNotAllowed(action.targetPath) }
+            operation = .init(entryID: record.entryID, kind: .restore, sourcePath: action.targetPath,
+                destinationPath: record.sourcePath, expectedIdentity: expected)
+            context = .init(homeDirectoryURL: homeDirectoryURL, allowedApplicationPaths: record.kind == .uninstall ? [record.sourcePath] : [],
+                recoveryMappings: [action.targetPath: record.sourcePath])
         }
-
-        return AtlasHelperActionResult(
-            action: action,
-            success: true,
-            message: message,
-            resolvedPath: targetURL.path
-        )
+        return try AtlasFileSafetyPolicy.validate(operation, context: context)
     }
-
-    private func ownershipTargets(for rootURL: URL) throws -> [URL] {
-        var urls: [URL] = [rootURL]
-
-        let values = try rootURL.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        guard values.isDirectory == true, values.isSymbolicLink != true else {
-            return urls
+    public func perform(_ action: AtlasHelperAction) throws -> AtlasHelperActionResult {
+        let validated = try validateEvidence(action)
+        guard AtlasSafetyCapabilities.fileMutationsEnabled else { throw HelperValidationError.pathNotAllowed(action.targetPath) }
+        if action.kind == .restoreItem {
+            _ = try AtlasFileMover.moveWithoutReplacing(validated)
+            return AtlasHelperActionResult(action: action, success: true, message: "Restored verified object.", resolvedPath: action.destinationPath)
         }
-
-        if let enumerator = fileManager.enumerator(
-            at: rootURL,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-            options: [.skipsHiddenFiles]
-        ) {
-            for case let url as URL in enumerator {
-                let resourceValues = try? url.resourceValues(forKeys: [.isSymbolicLinkKey])
-                if resourceValues?.isSymbolicLink == true {
-                    continue
-                }
-                urls.append(url)
-            }
-        }
-
-        return urls
-    }
-
-    private func validate(action: AtlasHelperAction, targetURL: URL, destinationURL: URL?) throws {
-        guard fileManager.fileExists(atPath: targetURL.path) else {
-            throw HelperValidationError.pathNotFound(targetURL.path)
-        }
-
-        let isAllowed = { (url: URL) in
-            allowedRoots.contains { root in
-                url.path.hasPrefix(root + "/")
-            }
-        }
-
-        switch action.kind {
-        case .trashItems, .removeLaunchService, .repairOwnership:
-            guard isAllowed(targetURL) else {
-                throw HelperValidationError.pathNotAllowed(targetURL.path)
-            }
-        case .restoreItem:
-            let trashRoot = homeDirectoryURL.appendingPathComponent(".Trash", isDirectory: true).path
-            guard targetURL.path.hasPrefix(trashRoot + "/") else {
-                throw HelperValidationError.pathNotAllowed(targetURL.path)
-            }
-            guard let destinationURL else {
-                throw HelperValidationError.invalidRestoreDestination(nil)
-            }
-            guard isAllowed(destinationURL) else {
-                throw HelperValidationError.invalidRestoreDestination(destinationURL.path)
-            }
-            if fileManager.fileExists(atPath: destinationURL.path) {
-                throw HelperValidationError.restoreDestinationExists(destinationURL.path)
-            }
-        }
-
-        if action.kind == .removeLaunchService {
-            guard targetURL.pathExtension == "plist" else {
-                throw HelperValidationError.invalidLaunchServicePath(targetURL.path)
-            }
-        }
+        guard try AtlasFileIdentityReader.read(URL(fileURLWithPath: action.targetPath)) == action.expectedIdentity else { throw HelperValidationError.pathNotAllowed(action.targetPath) }
+        var trashed: NSURL?
+        try FileManager.default.trashItem(at: URL(fileURLWithPath: action.targetPath), resultingItemURL: &trashed)
+        guard let destination = trashed as URL?, try AtlasFileIdentityReader.read(destination) == action.expectedIdentity else { throw HelperValidationError.pathNotAllowed(action.targetPath) }
+        return AtlasHelperActionResult(action: action, success: true, message: "Moved verified object to Trash.", resolvedPath: destination.path)
     }
 }
 

@@ -68,8 +68,15 @@ public struct AtlasWorkspaceState: Codable, Hashable, Sendable {
     }
 }
 
+extension AtlasWorkspaceState {
+    public static var empty: AtlasWorkspaceState {
+        AtlasWorkspaceState(snapshot: AtlasWorkspaceSnapshot(reclaimableSpaceBytes: 0, findings: [], apps: [], taskRuns: [], recoveryItems: [], permissions: []),
+            currentPlan: ActionPlan(title: "", items: [], estimatedBytes: 0), settings: AtlasSettings(recoveryRetentionDays: 7, notificationsEnabled: true, excludedPaths: []))
+    }
+}
+
 public enum AtlasWorkspaceStateSchemaVersion {
-    public static let current = 1
+    public static let current = 2
 }
 
 public struct AtlasPersistedWorkspaceState: Codable, Hashable, Sendable {
@@ -226,12 +233,12 @@ public protocol AtlasWorkerServing: Sendable {
 }
 
 public enum AtlasWorkspaceControllerError: LocalizedError, Sendable {
-    case rejected(code: AtlasProtocolErrorCode, reason: String)
+    case rejected(code: AtlasProtocolErrorCode, reason: String, snapshot: AtlasWorkspaceSnapshot? = nil)
     case unexpectedResponse(String)
 
     public var errorDescription: String? {
         switch self {
-        case let .rejected(code, reason):
+        case let .rejected(code, reason, _):
             switch code {
             case .executionUnavailable:
                 return AtlasL10n.string("application.error.executionUnavailable", reason)
@@ -358,7 +365,7 @@ public struct AtlasWorkspaceController: Sendable {
         case let .health(healthSnapshot):
             return AtlasHealthSnapshotOutput(snapshot: result.snapshot, healthSnapshot: healthSnapshot)
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected health response for healthSnapshot.")
         }
@@ -372,7 +379,7 @@ public struct AtlasWorkspaceController: Sendable {
         case .permissions:
             return AtlasPermissionInspectionOutput(snapshot: result.snapshot, events: result.events)
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected permissions response for inspectPermissions.")
         }
@@ -392,7 +399,7 @@ public struct AtlasWorkspaceController: Sendable {
                 summary: summary(from: result.events, fallback: AtlasL10n.string("application.scan.completed"))
             )
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected accepted response for startScan.")
         }
@@ -410,10 +417,16 @@ public struct AtlasWorkspaceController: Sendable {
                 summary: AtlasL10n.string(plan.items.count == 1 ? "application.preview.updated.one" : "application.preview.updated.other", plan.items.count)
             )
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected preview response for previewPlan.")
         }
+    }
+
+    public func requestStatus(requestID: UUID) async throws -> AtlasRequestStatus {
+        let result = try await worker.submit(AtlasRequestEnvelope(command: .requestStatus(requestID: requestID)))
+        guard case let .requestStatus(status) = result.response.response else { throw AtlasWorkspaceControllerError.unexpectedResponse("Expected operation status") }
+        return status
     }
 
     public func executePlan(planID: UUID, executionSelection: AtlasExecutionSelection? = nil) async throws -> AtlasTaskActionOutput {
@@ -429,7 +442,7 @@ public struct AtlasWorkspaceController: Sendable {
                 summary: summary(from: result.events, fallback: AtlasL10n.string("application.plan.executed"))
             )
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected accepted response for executePlan.")
         }
@@ -448,7 +461,7 @@ public struct AtlasWorkspaceController: Sendable {
                 summary: summary(from: result.events, fallback: AtlasL10n.string("application.recovery.completed"))
             )
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected accepted response for restoreItems.")
         }
@@ -466,7 +479,7 @@ public struct AtlasWorkspaceController: Sendable {
                 summary: AtlasL10n.string(apps.count == 1 ? "application.apps.loaded.one" : "application.apps.loaded.other", apps.count)
             )
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected apps response for listApps.")
         }
@@ -484,7 +497,7 @@ public struct AtlasWorkspaceController: Sendable {
                 summary: AtlasL10n.string("application.apps.previewUpdated", plan.title)
             )
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected preview response for previewAppUninstall.")
         }
@@ -503,7 +516,7 @@ public struct AtlasWorkspaceController: Sendable {
                 summary: summary(from: result.events, fallback: AtlasL10n.string("application.apps.uninstallCompleted"))
             )
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected accepted response for executeAppUninstall.")
         }
@@ -530,7 +543,7 @@ public struct AtlasWorkspaceController: Sendable {
                 summary: summary(from: result.events, fallback: AtlasL10n.string("model.fileorganizer.ready"))
             )
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected fileOrganizerEntries response for fileOrganizerScan.")
         }
@@ -548,7 +561,7 @@ public struct AtlasWorkspaceController: Sendable {
                 summary: AtlasL10n.string("fileorganizer.status.complete")
             )
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected fileOrganizerEntries response for fileOrganizerClassify.")
         }
@@ -566,7 +579,7 @@ public struct AtlasWorkspaceController: Sendable {
                 summary: AtlasL10n.string(plan.items.count == 1 ? "application.preview.updated.one" : "application.preview.updated.other", plan.items.count)
             )
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected fileOrganizerPlan response for fileOrganizerPreviewPlan.")
         }
@@ -589,7 +602,7 @@ public struct AtlasWorkspaceController: Sendable {
                 failedCount: failedCount
             )
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected accepted response for fileOrganizerExecutePlan.")
         }
@@ -607,7 +620,7 @@ public struct AtlasWorkspaceController: Sendable {
                 summary: AtlasL10n.string("fileorganizer.status.complete")
             )
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected fileOrganizerPlan response for fileOrganizerDryRun.")
         }
@@ -621,7 +634,7 @@ public struct AtlasWorkspaceController: Sendable {
         case let .settings(settings):
             return AtlasSettingsOutput(settings: settings)
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected settings response for settings.")
         }
@@ -635,7 +648,7 @@ public struct AtlasWorkspaceController: Sendable {
         case let .settings(settings):
             return AtlasSettingsOutput(settings: settings)
         case let .rejected(code, reason):
-            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason)
+            throw AtlasWorkspaceControllerError.rejected(code: code, reason: reason, snapshot: result.snapshot)
         default:
             throw AtlasWorkspaceControllerError.unexpectedResponse("Expected settings response for updateSettings.")
         }

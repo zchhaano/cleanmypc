@@ -35,6 +35,12 @@ final class AtlasActionPlanRegistryTests: XCTestCase {
         }
         XCTAssertThrowsError(try registry.resolve(AtlasExecutionSelection(planID: valid.planID, planDigest: "stale", selectedEntryIDs: valid.selectedEntryIDs)))
     }
+    func testPreviewRetentionIsBoundedAndEvictedPlansAreStale() throws {
+        let registry = AtlasActionPlanRegistry(), op = operation()
+        let old = try registry.register(plan: .init(title: "old", items: [], estimatedBytes: 0), operations: [op], policyRevision: 1)
+        for _ in 0..<8 { _ = try registry.register(plan: .init(title: "new", items: [], estimatedBytes: 0), operations: [operation()], policyRevision: 1) }
+        XCTAssertThrowsError(try registry.resolve(old.plan.executionSelection!))
+    }
     func testExecutionRejects1001SelectionsAndDuplicateObjects() throws {
         let registry = AtlasActionPlanRegistry(), ops = (0..<1001).map { _ in operation() }
         let plan = try registry.register(plan: ActionPlan(title: "large", items: [], estimatedBytes: 0), operations: ops, policyRevision: 1)

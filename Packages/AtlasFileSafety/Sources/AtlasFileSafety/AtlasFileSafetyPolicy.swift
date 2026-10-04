@@ -53,10 +53,15 @@ public enum AtlasFileSafetyPolicy {
         case .smartClean:
             guard ["Library/Caches", "Library/Logs"].contains(where: { isDescendant(source, of: home.appendingPathComponent($0)) }), !AtlasFileIdentityReader.hasPackageAncestor(source) else { throw AtlasFileSafetyError.unsafePath(source.path) }
         case .uninstall:
-            guard context.allowedApplicationPaths.contains(source.path), source.pathExtension.lowercased() == "app", !AtlasFileIdentityReader.hasPackageAncestor(source, includingSelf: false) else { throw AtlasFileSafetyError.unsafePath(source.path) }
+            guard (isDescendant(source, of: URL(fileURLWithPath: "/Applications")) || isDescendant(source, of: home.appendingPathComponent("Applications"))), context.allowedApplicationPaths.contains(source.path), source.pathExtension.lowercased() == "app", !AtlasFileIdentityReader.hasPackageAncestor(source, includingSelf: false) else { throw AtlasFileSafetyError.unsafePath(source.path) }
             if let bundleID = Bundle(url: source)?.bundleIdentifier, bundleID.hasPrefix("com.apple.") { throw AtlasFileSafetyError.unsafePath(source.path) }
         case .restore:
             guard let destination, context.recoveryMappings[source.path] == destination.path, destination.path != home.path, !AtlasFileIdentityReader.hasPackageAncestor(destination, includingSelf: false) else { throw AtlasFileSafetyError.unsafePath(source.path) }
+            let cache = ["Library/Caches", "Library/Logs"].contains { isDescendant(destination, of: home.appendingPathComponent($0)) }
+            let userFile = isDescendant(destination, of: home) && !forbiddenOrganizerPath(destination, home: home)
+            let application = context.allowedApplicationPaths.contains(destination.path) && destination.pathExtension.lowercased() == "app" && (isDescendant(destination, of: URL(fileURLWithPath: "/Applications")) || isDescendant(destination, of: home.appendingPathComponent("Applications")))
+            guard cache || userFile || application else { throw AtlasFileSafetyError.unsafePath(destination.path) }
+
         }
         guard try AtlasFileIdentityReader.read(source) == intent.expectedIdentity else { throw AtlasFileSafetyError.identityChanged }
         if let destination, FileManager.default.fileExists(atPath: destination.path) { throw AtlasFileSafetyError.targetExists }

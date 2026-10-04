@@ -50,7 +50,7 @@ final class AtlasAppUITests: XCTestCase {
 
         app.staticTexts["route.smartClean"].click()
         XCTAssertTrue(app.buttons["smartclean.runScan"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["smartclean.refreshPreview"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["smartclean.refreshPreview"].waitForExistence(timeout: 1), "An empty production workspace starts at scan")
         XCTAssertFalse(app.buttons["smartclean.executePreview"].waitForExistence(timeout: 2))
 
         // `P1-18`（CONTRACT）：设置此前**没有任何菜单入口或键盘路径**，侧栏行的合成
@@ -148,35 +148,31 @@ final class AtlasAppUITests: XCTestCase {
     /// （树里是 `_NS:58` 之类），且正文**只渲染第一行**。因此本用例只能断言
     /// 「弹窗确实打开 + ① 渲染」；②③④ 记 `NOT RUN`，不冒充覆盖。
     /// ①②③ 的主载体仍是**构造器非可选参数**（缺项编译不过），④ 由**类型**保证。
-    func testDestructiveConfirmationOpensAndRendersScopeQuestion() {
+    func testSecurityClosureKeepsExecutionDisabledWithReason() {
         let app = makeApp(fixture: "review-executable")
         app.launch()
-
-        // `UI-02`：断言用中文串，故**在导航前**先确认语言前置条件。
-        Self.pinnedLanguageIsZhHans(app)
-
         let window = app.windows.firstMatch
         XCTAssertTrue(window.waitForExistence(timeout: 5))
-        window.typeKey("2", modifierFlags: .command) // 智能清理 → ② 复核
-
+        window.typeKey("2", modifierFlags: .command)
         let execute = app.buttons["smartclean.executeSelection"]
-        XCTAssertTrue(execute.waitForExistence(timeout: 5), "fixture 必须落在可执行的复核页")
-        XCTAssertTrue(execute.isEnabled, "计划必须是新鲜且有可执行目标的")
-        execute.click()
+        XCTAssertTrue(execute.waitForExistence(timeout: 5))
+        XCTAssertFalse(execute.isEnabled)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "value CONTAINS %@", "暂不可更改文件")).firstMatch.waitForExistence(timeout: 5))
+    }
 
-        XCTAssertTrue(app.sheets.firstMatch.waitForExistence(timeout: 5), "破坏性确认弹窗必须打开")
-
-        // ① 会动什么 —— 按**文本前缀**匹配（identifier 被 AppKit 剥掉了，见上，
-        // 故此处无法改用 identifier 判据）。
-        //
-        // `UI-02`：语言前置条件已在 `launch()` 后显式确认（见本用例开头）。
-        let scopeLine = app.staticTexts.matching(
-            NSPredicate(format: "value BEGINSWITH %@", "将清理已选的")
-        ).firstMatch
-        // 等待存在，而非立刻 `.exists`：弹窗刚出现时正文可能还在动画/布局中
-        // （同屏的开场断言已用 `waitForExistence`，这里此前是唯一的裸 `.exists`，
-        // 构成动画期竞态 —— 复审 `UI-03`）。
-        XCTAssertTrue(scopeLine.waitForExistence(timeout: 5), "I-4 ① 会动什么必须渲染")
+    func testMissingRecoverySourceShowsReasonAndDisabledRestore() {
+        let app = makeApp(fixture: "recovery-source-missing")
+        app.launch()
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 5))
+        window.typeKey("5", modifierFlags: .command)
+        let row = app.staticTexts["Missing source"]
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.click()
+        XCTAssertTrue(app.staticTexts["ledger.restore.availability"].waitForExistence(timeout: 5))
+        let restore = app.buttons["ledger.restore.00000000-0000-0000-0000-000000000099"]
+        XCTAssertTrue(restore.waitForExistence(timeout: 5))
+        XCTAssertFalse(restore.isEnabled)
     }
 
     /// `P1-18`（CONTRACT）：设置必须有**可点的菜单入口**，且点它能抵达设置屏。

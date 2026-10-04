@@ -29,6 +29,7 @@ public enum AtlasXPCTransportError: LocalizedError, Sendable, Equatable {
     case invalidResponse
     case connectionUnavailable(String)
     case timedOut(TimeInterval)
+    case resultUnknown(requestID: UUID)
 
     public var errorDescription: String? {
         switch self {
@@ -40,33 +41,38 @@ public enum AtlasXPCTransportError: LocalizedError, Sendable, Equatable {
             return AtlasL10n.string("xpc.error.invalidResponse")
         case let .connectionUnavailable(reason):
             return AtlasL10n.string("xpc.error.connectionUnavailable", reason)
+        case let .resultUnknown(requestID):
+            return AtlasL10n.string("security.execution.unknown", requestID.uuidString)
         case let .timedOut(seconds):
             return AtlasL10n.string("xpc.error.timedOut", seconds)
         }
     }
 }
 
+/// XPC reply callback is transferred to one request task and invoked exactly once there.
+private final class AtlasXPCReply: @unchecked Sendable {
+    let callback: (Data?, NSError?) -> Void
+    init(_ callback: @escaping (Data?, NSError?) -> Void) { self.callback = callback }
+}
+
 public final class AtlasXPCWorkerServiceHost: NSObject, AtlasXPCWorkerServiceProtocol {
     private let worker: AtlasScaffoldWorkerService
-    private let encoder: JSONEncoder
-    private let decoder: JSONDecoder
 
     public init(worker: AtlasScaffoldWorkerService = AtlasScaffoldWorkerService()) {
         self.worker = worker
-        self.encoder = JSONEncoder()
-        self.decoder = JSONDecoder()
         super.init()
     }
 
     public func sendRequestData(_ requestData: Data, withReply reply: @escaping (Data?, NSError?) -> Void) {
+        let worker = self.worker, response = AtlasXPCReply(reply)
         Task {
             do {
-                let request = try decoder.decode(AtlasRequestEnvelope.self, from: requestData)
+                let request = try JSONDecoder().decode(AtlasRequestEnvelope.self, from: requestData)
                 let result = try await worker.submit(request)
-                let payload = try encoder.encode(result)
-                reply(payload, nil)
+                let payload = try JSONEncoder().encode(result)
+                response.callback(payload, nil)
             } catch {
-                reply(nil, error as NSError)
+                response.callback(nil, error as NSError)
             }
         }
     }
@@ -88,7 +94,16 @@ public final class AtlasXPCListenerDelegate: NSObject, NSXPCListenerDelegate {
     }
 }
 
+public typealias AtlasXPCCallbackRequestExecutor = @Sendable (Data, @escaping @Sendable (Result<Data, Error>) -> Void) -> @Sendable () -> Void
+
 public typealias AtlasXPCDataRequestExecutor = @Sendable (Data) async throws -> Data
+
+/// DispatchWorkItem.cancel is thread safe; immutable ownership permits cleanup from any completion path.
+private final class AtlasXPCDeadline: @unchecked Sendable {
+    let item: DispatchWorkItem
+    init(_ item: DispatchWorkItem) { self.item = item }
+    func cancel() { item.cancel() }
+}
 
 private final class AtlasXPCConnectionBox: @unchecked Sendable {
     let connection: NSXPCConnection
@@ -101,6 +116,7 @@ private final class AtlasXPCConnectionBox: @unchecked Sendable {
 public actor AtlasXPCWorkerClient: AtlasWorkerServing {
     private let serviceName: String
     private let requestConfiguration: AtlasXPCRequestConfiguration
+    private let callbackExecutor: AtlasXPCCallbackRequestExecutor?
     private let requestExecutor: AtlasXPCDataRequestExecutor?
     private var connection: NSXPCConnection?
     private let encoder = JSONEncoder()
@@ -109,14 +125,19 @@ public actor AtlasXPCWorkerClient: AtlasWorkerServing {
     public init(
         serviceName: String = AtlasXPCWorkerConstants.serviceName,
         requestConfiguration: AtlasXPCRequestConfiguration = AtlasXPCRequestConfiguration(),
-        requestExecutor: AtlasXPCDataRequestExecutor? = nil
+        requestExecutor: AtlasXPCDataRequestExecutor? = nil,
+        callbackExecutor: AtlasXPCCallbackRequestExecutor? = nil
     ) {
+        self.callbackExecutor = callbackExecutor
         self.serviceName = serviceName
         self.requestConfiguration = requestConfiguration
         self.requestExecutor = requestExecutor
     }
 
     public func submit(_ request: AtlasRequestEnvelope) async throws -> AtlasWorkerCommandResult {
+        guard requestConfiguration.timeout.isFinite, requestConfiguration.timeout > 0,
+              (0...3).contains(requestConfiguration.retryCount), requestConfiguration.retryDelay.isFinite,
+              (0...5).contains(requestConfiguration.retryDelay) else { throw AtlasXPCTransportError.invalidResponse }
         let requestData: Data
 
         do {
@@ -125,16 +146,24 @@ public actor AtlasXPCWorkerClient: AtlasWorkerServing {
             throw AtlasXPCTransportError.encodingFailed(error.localizedDescription)
         }
 
-        let responseData = try await submitRequestDataWithRetry(requestData)
+        let responseData: Data
+        do { responseData = try await submitRequestDataWithRetry(requestData, mayRetry: request.command.isReadOnlyForRetry) }
+        catch {
+            if !request.command.isReadOnlyForRetry { throw AtlasXPCTransportError.resultUnknown(requestID: request.id) }
+            throw error
+        }
 
         do {
-            return try decoder.decode(AtlasWorkerCommandResult.self, from: responseData)
+            let result = try decoder.decode(AtlasWorkerCommandResult.self, from: responseData)
+            guard result.response.requestID == request.id, result.request.id == request.id else { throw AtlasXPCTransportError.invalidResponse }
+            return result
         } catch {
+            if !request.command.isReadOnlyForRetry { throw AtlasXPCTransportError.resultUnknown(requestID: request.id) }
             throw AtlasXPCTransportError.decodingFailed(error.localizedDescription)
         }
     }
 
-    private func submitRequestDataWithRetry(_ requestData: Data) async throws -> Data {
+    private func submitRequestDataWithRetry(_ requestData: Data, mayRetry: Bool) async throws -> Data {
         var attempt = 0
         var lastError: Error = AtlasXPCTransportError.invalidResponse
 
@@ -144,7 +173,7 @@ public actor AtlasXPCWorkerClient: AtlasWorkerServing {
             } catch {
                 lastError = error
 
-                guard attempt < requestConfiguration.retryCount,
+                guard mayRetry, !Task.isCancelled, attempt < requestConfiguration.retryCount,
                       shouldRetry(after: error) else {
                     throw error
                 }
@@ -153,7 +182,7 @@ public actor AtlasXPCWorkerClient: AtlasWorkerServing {
 
                 if requestConfiguration.retryDelay > 0 {
                     let delay = UInt64(requestConfiguration.retryDelay * 1_000_000_000)
-                    try? await Task.sleep(nanoseconds: delay)
+                    try await Task.sleep(nanoseconds: delay)
                 }
 
                 attempt += 1
@@ -164,62 +193,45 @@ public actor AtlasXPCWorkerClient: AtlasWorkerServing {
     }
 
     private func submitRequestDataOnce(_ requestData: Data) async throws -> Data {
-        if let requestExecutor {
-            return try await withTimeout {
-                try await requestExecutor(requestData)
-            }
-        }
-
-        let connectionBox = AtlasXPCConnectionBox(ensureConnection())
-        return try await withTimeout {
-            try await self.sendRequestData(requestData, over: connectionBox.connection)
-        }
-    }
-
-    private func withTimeout(operation: @escaping @Sendable () async throws -> Data) async throws -> Data {
-        guard requestConfiguration.timeout > 0 else {
-            return try await operation()
-        }
-
-        return try await withThrowingTaskGroup(of: Data.self) { group in
-            group.addTask {
-                try await operation()
-            }
-            group.addTask {
-                let timeoutNanoseconds = UInt64(self.requestConfiguration.timeout * 1_000_000_000)
-                try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                throw AtlasXPCTransportError.timedOut(self.requestConfiguration.timeout)
-            }
-
-            let result = try await group.next() ?? { throw AtlasXPCTransportError.invalidResponse }()
-            group.cancelAll()
-            return result
-        }
-    }
-
-    private func sendRequestData(_ requestData: Data, over connection: NSXPCConnection) async throws -> Data {
-        try await withCheckedThrowingContinuation { continuation in
-            guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
-                continuation.resume(throwing: AtlasXPCTransportError.connectionUnavailable(error.localizedDescription))
-            }) as? AtlasXPCWorkerServiceProtocol else {
-                continuation.resume(throwing: AtlasXPCTransportError.connectionUnavailable("Remote object proxy is unavailable."))
-                return
-            }
-
-            proxy.sendRequestData(requestData) { responseData, responseError in
-                if let responseError {
-                    continuation.resume(throwing: AtlasXPCTransportError.connectionUnavailable(responseError.localizedDescription))
-                    return
+        let completion = AtlasXPCRequestCompletion()
+        let timeout = requestConfiguration.timeout
+        let executor = requestExecutor
+        let callback = callbackExecutor
+        let connectionBox = executor == nil && callback == nil ? AtlasXPCConnectionBox(newConnection()) : nil
+        return try await withTaskCancellationHandler {
+            if Task.isCancelled { throw CancellationError() }
+            return try await withCheckedThrowingContinuation { continuation in
+                completion.install(continuation)
+                if timeout > 0 {
+                    let item = DispatchWorkItem { [weak completion] in completion?.finish(.failure(AtlasXPCTransportError.timedOut(timeout))) }
+                    let deadline = AtlasXPCDeadline(item)
+                    completion.onFinish { deadline.cancel() }
+                    DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: item)
                 }
-
-                guard let responseData else {
-                    continuation.resume(throwing: AtlasXPCTransportError.invalidResponse)
-                    return
+                if let callback {
+                    let cancel = callback(requestData) { completion.finish($0) }
+                    completion.onFinish(cancel)
+                } else if let executor {
+                    let task = Task {
+                        do { completion.finish(.success(try await executor(requestData))) }
+                        catch { completion.finish(.failure(error)) }
+                    }
+                    completion.onFinish { task.cancel() }
+                } else if let connectionBox {
+                    completion.onFinish { connectionBox.connection.invalidate() }
+                    guard let proxy = connectionBox.connection.remoteObjectProxyWithErrorHandler({ error in
+                        completion.finish(.failure(AtlasXPCTransportError.connectionUnavailable(error.localizedDescription)))
+                    }) as? AtlasXPCWorkerServiceProtocol else {
+                        completion.finish(.failure(AtlasXPCTransportError.invalidResponse)); return
+                    }
+                    proxy.sendRequestData(requestData) { data, error in
+                        if let error { completion.finish(.failure(AtlasXPCTransportError.connectionUnavailable(error.localizedDescription))) }
+                        else if let data { completion.finish(.success(data)) }
+                        else { completion.finish(.failure(AtlasXPCTransportError.invalidResponse)) }
+                    }
                 }
-
-                continuation.resume(returning: responseData)
             }
-        }
+        } onCancel: { completion.finish(.failure(CancellationError())) }
     }
 
     private func shouldRetry(after error: Error) -> Bool {
@@ -230,26 +242,15 @@ public actor AtlasXPCWorkerClient: AtlasWorkerServing {
         switch transportError {
         case .connectionUnavailable, .invalidResponse, .timedOut:
             return true
-        case .encodingFailed, .decodingFailed:
+        case .encodingFailed, .decodingFailed, .resultUnknown:
             return false
         }
     }
 
-    private func ensureConnection() -> NSXPCConnection {
-        if let connection {
-            return connection
-        }
-
+    private func newConnection() -> NSXPCConnection {
         let connection = NSXPCConnection(serviceName: serviceName)
         connection.remoteObjectInterface = NSXPCInterface(with: AtlasXPCWorkerServiceProtocol.self)
-        connection.invalidationHandler = { [weak connection] in
-            Task { self.clearConnection(ifMatching: connection) }
-        }
-        connection.interruptionHandler = { [weak connection] in
-            Task { self.clearConnection(ifMatching: connection) }
-        }
         connection.resume()
-        self.connection = connection
         return connection
     }
 
@@ -294,7 +295,7 @@ public actor AtlasPreferredWorkerService: AtlasWorkerServing {
     public func submit(_ request: AtlasRequestEnvelope) async throws -> AtlasWorkerCommandResult {
         do {
             let result = try await xpcClient.submit(request)
-            if shouldFallback(from: result) {
+            if request.command.isReadOnlyForRetry, shouldFallback(from: result) {
                 guard allowFallback else {
                     return result
                 }
@@ -302,7 +303,7 @@ public actor AtlasPreferredWorkerService: AtlasWorkerServing {
             }
             return result
         } catch {
-            guard allowFallback else {
+            guard request.command.isReadOnlyForRetry, allowFallback else {
                 throw error
             }
             return try await fallbackWorker.submit(request)

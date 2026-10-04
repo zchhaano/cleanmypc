@@ -31,3 +31,9 @@ Without an explicit persistence envelope, Atlas can only rely on best-effort sha
 - Keep the unversioned top-level state file and rely on ad hoc per-type decoding: rejected because it scales poorly as recovery payloads evolve.
 - Break compatibility and require a fresh state file: rejected because it damages trust in `History` and `Recovery`.
 - Refresh app inventory only on explicit user action after restore: rejected because it leaves a visible stale-evidence gap in a trust-critical workflow.
+
+## Security revision — 2026-10-04
+
+Workspace/recovery payload schema is now 2; journal version is 1. An ordinary-user, no-follow private directory (0700), regular single-link files (0600), and a nonblocking cross-process lease protect migration and mutation. Schema 1/raw legacy state is backed up before migration. Corrupt/future state is preserved and causes a visible read-only failure, never replaced with fixtures. Production absence initializes an empty workspace.
+
+Per-file planned/moved/restorePlanned/restored records are the durable authority. Frames include sequence, version and checksum and are fsynced; plan and request selection precede mutations. Damaged journals refuse append/replay; valid prefixes can be shown only as needing reconciliation. Snapshots are rebuildable projections; snapshot save failure retains confirmed facts and freezes further writes. Finder Trash and journaling are separate operations: their unknown interval never authorizes retry or same-name recovery. Older mappings lacking immutable identity remain unverified.

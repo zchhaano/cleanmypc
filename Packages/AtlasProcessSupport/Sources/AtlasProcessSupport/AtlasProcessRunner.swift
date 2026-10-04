@@ -62,7 +62,11 @@ public struct AtlasProcessRunner: AtlasProcessRunning {
         guard spawnError == 0 else { throw AtlasProcessError.launchFailed(spawnError) }
         closeOwned(input[1]); closeOwned(output[1]); closeOwned(diagnostic[1])
         for fd in [input[0], output[0], diagnostic[0]] {
-            if fcntl(fd, F_SETFL, O_NONBLOCK) < 0 { kill(-pid, SIGKILL); throw AtlasProcessError.ioFailed(errno) }
+            if fcntl(fd, F_SETFL, O_NONBLOCK) < 0 {
+                let code = errno; kill(-pid, SIGKILL)
+                for _ in 0..<100 { if waitpid(pid, nil, WNOHANG) == pid { break }; usleep(1000) }
+                throw AtlasProcessError.ioFailed(code)
+            }
         }
         let deadline = ContinuousClock.now.advanced(by: r.timeout)
         var failure: AtlasProcessError?

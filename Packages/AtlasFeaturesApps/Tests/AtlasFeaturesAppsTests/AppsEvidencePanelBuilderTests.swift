@@ -199,7 +199,7 @@ final class AppsEvidencePanelBuilderTests: XCTestCase {
         let app = makeApp()
         let text = AppsEvidencePanelBuilder.actionBarMetric(selectedApp: app)
         XCTAssertNotNil(text)
-        XCTAssertTrue(text!.contains("1.2"))
+        XCTAssertTrue(text!.contains("1.2") || text!.contains("1,2"), "Decimal separator follows the test host locale")
     }
 
     // MARK: - whyText

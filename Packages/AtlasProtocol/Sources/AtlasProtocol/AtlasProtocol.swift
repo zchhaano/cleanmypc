@@ -23,6 +23,7 @@ public struct AtlasCapabilityStatus: Codable, Hashable, Sendable {
 
 public enum AtlasCommand: Codable, Hashable, Sendable {
     case healthSnapshot
+    case requestStatus(requestID: UUID)
     case inspectPermissions
     case startScan(taskID: UUID)
     case previewPlan(taskID: UUID, findingIDs: [UUID])
@@ -38,6 +39,15 @@ public enum AtlasCommand: Codable, Hashable, Sendable {
     case fileOrganizerPreviewPlan(taskID: UUID, entryIDs: [UUID])
     case fileOrganizerExecutePlan(planID: UUID)
     case fileOrganizerDryRun(planID: UUID)
+}
+
+extension AtlasCommand {
+    public var isReadOnlyForRetry: Bool {
+        switch self {
+        case .healthSnapshot, .inspectPermissions, .appsList, .settingsGet, .requestStatus: return true
+        default: return false
+        }
+    }
 }
 
 public struct AtlasRequestEnvelope: Codable, Hashable, Sendable, Identifiable {
@@ -76,6 +86,7 @@ public enum AtlasProtocolErrorCode: String, Codable, CaseIterable, Hashable, Sen
 
 public enum AtlasResponse: Codable, Hashable, Sendable {
     case accepted(task: AtlasTaskDescriptor)
+    case requestStatus(AtlasRequestStatus)
     case health(AtlasHealthSnapshot)
     case permissions([PermissionState])
     case apps([AppFootprint])
@@ -128,8 +139,14 @@ public struct AtlasHelperAction: Codable, Hashable, Sendable, Identifiable {
     public var kind: AtlasPrivilegedActionKind
     public var targetPath: String
     public var destinationPath: String?
+    public var operationID: UUID?
+    public var planID: UUID?
+    public var planDigest: String?
+    public var policyRevision: Int?
+    public var expectedIdentity: AtlasFileIdentity?
 
-    public init(id: UUID = UUID(), kind: AtlasPrivilegedActionKind, targetPath: String, destinationPath: String? = nil) {
+    public init(id: UUID = UUID(), kind: AtlasPrivilegedActionKind, targetPath: String, destinationPath: String? = nil, operationID: UUID? = nil, planID: UUID? = nil, planDigest: String? = nil, policyRevision: Int? = nil, expectedIdentity: AtlasFileIdentity? = nil) {
+        self.operationID = operationID; self.planID = planID; self.planDigest = planDigest; self.policyRevision = policyRevision; self.expectedIdentity = expectedIdentity
         self.id = id
         self.kind = kind
         self.targetPath = targetPath

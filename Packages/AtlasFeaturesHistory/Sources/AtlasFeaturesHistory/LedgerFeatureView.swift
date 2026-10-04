@@ -321,7 +321,7 @@ public struct LedgerFeatureView: View {
     /// advertising a restore capacity that partly does not exist. The detail
     /// panel already disables restore for expired items via `!item.isExpired`.)
     private var restorableRecoveryItems: [RecoveryItem] {
-        recoveryItems.filter { !$0.isExpired }.sorted { $0.deletedAt > $1.deletedAt }
+        recoveryItems.filter { AtlasSafetyCapabilities.fileMutationsEnabled && $0.recoveryAvailability == .ready && !$0.isExpired }.sorted { $0.deletedAt > $1.deletedAt }
     }
     private var restorableRecoveryBytes: Int64 { restorableRecoveryItems.reduce(Int64(0)) { $0 + $1.bytes } }
     private var recoveryTone: AtlasTone { restorableRecoveryItems.contains(where: \.isExpiringSoon) ? .warning : .success }

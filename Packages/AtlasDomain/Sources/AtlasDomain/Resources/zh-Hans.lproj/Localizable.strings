@@ -1343,3 +1343,17 @@
 "glossary.restorepoint.definition" = "执行前自动建立的可恢复位置。保留期内可以还原到原位置。";
 
 "security.mutation.unavailable" = "恢复安全验证完成前，暂不可更改文件。";
+"security.recovery.ready" = "已找到记录中的来源；来源保持不变时才可恢复。";
+"security.recovery.unverified" = "旧记录无法证明文件可恢复，请手动核对。";
+"security.recovery.sourceMissing" = "恢复来源已丢失，本次没有恢复文件。";
+"security.recovery.targetConflict" = "原位置已有文件，未覆盖任何内容。";
+"security.recovery.reconciliationRequired" = "文件变更结果尚未确认，请先核对记录中的路径。";
+"security.recovery.restored" = "文件已恢复，身份已核对。";
+"security.execution.result" = "已更改 %d 个文件；%d 个文件失败或待核对。";
+"security.restore.completed" = "已根据记录恢复 %d 个文件。";
+"security.execution.unknown" = "文件变更结果尚未确认，请先核对文件。记录编号：%@";
+
+"security.state.unavailable" = "无法读取已保存记录，暂不可更改文件：%@";
+"security.recovery.recordsChanged" = "此前显示的 %d 条记录不在当前列表中，恢复状态未知。";
+
+"security.provider.unavailable" = "扫描服务暂不可用，请在服务恢复后刷新。";

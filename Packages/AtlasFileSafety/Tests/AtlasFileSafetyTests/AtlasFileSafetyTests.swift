@@ -48,6 +48,22 @@ final class AtlasFileSafetyTests: XCTestCase {
         XCTAssertThrowsError(try AtlasFileSafetyPolicy.validateOrganizerRoot(home, homeDirectoryURL: home))
         XCTAssertEqual(try String(contentsOf: file), "protected")
     }
+    func testSelectedObjectReplacementAfterValidationIsRejected() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let docs = home.appendingPathComponent("Documents")
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        let file = docs.appendingPathComponent("a"), target = home.appendingPathComponent("Organized/a")
+        try Data("selected".utf8).write(to: file)
+        let intent = AtlasFileOperationIntent(entryID: UUID(), kind: .organize, sourcePath: file.path, destinationPath: target.path, expectedIdentity: try AtlasFileIdentityReader.read(file))
+        let validated = try AtlasFileSafetyPolicy.validate(intent, context: .init(homeDirectoryURL: home, organizerRoots: [docs]))
+        try FileManager.default.moveItem(at: file, to: docs.appendingPathComponent("original"))
+        try Data("replacement".utf8).write(to: file)
+        XCTAssertThrowsError(try AtlasFileMover.moveWithoutReplacing(validated))
+        XCTAssertEqual(try Data(contentsOf: file), Data("replacement".utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
+    }
+
     func testOpenedSourceParentDoesNotFollowReplacementLink() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).resolvingSymlinksInPath()
         defer { try? FileManager.default.removeItem(at: home) }

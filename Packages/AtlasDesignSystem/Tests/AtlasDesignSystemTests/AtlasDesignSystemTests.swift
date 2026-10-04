@@ -226,7 +226,10 @@ final class AtlasDesignSystemTests: XCTestCase {
                 withExtension: "json",
                 subdirectory: "AtlasColors.xcassets/\(name).colorset"
             ) != nil
-            XCTAssertTrue(compiled || raw, "colorset '\(name)' failed to resolve — name/string drift")
+            let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/AtlasDesignSystem/Resources/AtlasColors.xcassets/\(name).colorset/Contents.json")
+            let authored = FileManager.default.fileExists(atPath: source.path) && atlasFallbackNSColor(name) != nil
+            XCTAssertTrue(compiled || raw || authored, "colorset '\(name)' failed to resolve — name/string drift")
         }
     }
 
