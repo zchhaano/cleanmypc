@@ -1,3 +1,5 @@
+> Security candidate 2026-10-04: the [security acceptance table](../security/2026-10-01-release-acceptance.md) supersedes the mutation-positive scenarios below for this candidate. Native execution/restore, PAM changes and general CLI deletion are closed. Supported future native scope is exact Caches/Logs descendants, ordinary selected organizer files and whole known third-party applications; container/developer paths listed below are review-only. Earlier acceptance records do not establish safety for the new schema or capability reopening.
+
 # MVP Acceptance Matrix
 
 ## Goal

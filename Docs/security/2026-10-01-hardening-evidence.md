@@ -1,51 +1,66 @@
 # Security hardening evidence — 2026-10-01
 
-Base: `3716c48602a57d24ac2875989ad1beed53ee2405`.
-Workspace: `.worktrees/security-hardening`, branch `security/hardening-2026-10-01`.
+Updated 2026-10-04. Base `3716c48602a57d24ac2875989ad1beed53ee2405`.
+Workspace `.worktrees/security-hardening`; branch `security/hardening-2026-10-01`. Final review corrections are committed as `1bbffcc`; gate/media/acceptance records are in the following commit.
 
-## Environment and baseline
+## Candidate decision
 
-macOS 26.6.2 arm64; Xcode 27.0; Swift 6.4 compiler; Go 1.25.0 installed in ignored local tooling using official SHA-256; Bats 1.12.0 in local tooling.
-Baseline Packages fails existing `AtlasDesignSystemTests.testAllColorsetTokensResolve` and AtlasFeaturesAppsTests; details in `.superpowers/logs/baseline-packages.log`. Baseline CLI subset passes 46 tests.
+Code implementation C1–C4, N1–N6 and R1–R3 is present. This is a **closed-capability candidate**, not acceptance for reopening file/PAM mutations or publishing a release. See [release acceptance](2026-10-01-release-acceptance.md). VM, real mounted-volume, signed installation and new CI execution remain unverified. No push, merge, system installation, PAM transaction or VM execution was performed.
 
-## C1
+`AtlasSafetyCapabilities.fileMutationsEnabled`, `pamMutationsEnabled` and `cliCacheMutationsEnabled` remain false. Worker and Helper refuse native mutation independently of UI/environment configuration. General Shell deletion, privileged removal, tool-specific cleanup and automatic maintenance remain unavailable. The directly callable Go backend is ordinary-user-only, restricted to account `Library/Caches`; it is not connected to the Shell wrapper.
 
-Security regressions observed RED for ancestor-link deletion, sudo removal, failed network/Bluetooth detection, Trash emptying, PAM autofix and service cleanup; temporary-object replacement also RED. Logs: `.superpowers/logs/C1-*-red.log`.
-High-risk CLI operations are disabled at execution functions, independent of old configuration and interactive confirmation. Non-cache deletion stays unavailable. Runtime resources synchronize from the explicit manifest; check mode performs no writes. No real PAM/system/network/Trash action was performed.
+## Environment and actual results
 
-### Mutation inventory
+macOS 26.6.2 arm64; Xcode 27.0 / Swift 6.4 compiler; Go 1.25; Bats 1.12; XcodeGen 2.46. SPM uses tools 5.10 mode; App/XPC Xcode targets and an explicit Helper dependency build verify Swift 6. Local tools and logs live under ignored `.tooling` / `.superpowers/logs`.
 
-- `lib/core/file_ops.sh`: data removal delegates only to the confined backend; sudo and symlink removal disabled.
-- `lib/clean/system.sh`, service functions in `lib/clean/apps.sh`: read-only safety skip; no system updates or service state changes.
-- `lib/clean/user.sh`: Finder Trash operations removed; `.DS_Store` removal routed through safety wrapper.
-- `lib/uninstall/batch.sh`: stopping/unloading/deleting services, unregistering apps and real CLI uninstall disabled before side effects.
-- `lib/core/base.sh`: cleanup limited to process workspace and registered inode identity; replaced objects preserved.
-- Remaining `rm -f` callers in bin/lib are scanner scratch, UI spinner/lock artifacts or Mole's own metadata cache; no generic data cleanup bypass found.
-- `cmd/analyze/delete.go`: explicit user-selected Finder Trash action, not permanent `rm`; `cmd/analyze/cache.go`: analyzer's own cache file. Not expanded into a root capability.
+| Command | Actual outcome | Log in `.superpowers/logs/` |
+|---|---|---|
+| `swift test --package-path Packages` with private state env | 640 XCTest cases, 0 failures | `packages-verified.log` |
+| `swift test --package-path Apps` with private state env | 63 cases, 0 failures | `apps-candidate-verified.log` |
+| `swift test --package-path Helpers` | 4 cases, 0 failures | `helpers-complete.log` |
+| `swift build --package-path Helpers -Xswiftc -swift-version -Xswiftc 6` | Build complete | `helpers-strict-verified.log` |
+| `swift build --package-path XPC` / `Testing` | Build complete | `xpc-verified.log`, `testing-verified.log` |
+| `scripts/test.sh` with local Bats/Go | 498 Bats cases, no skip/failure; Go packages and isolated CLI installation pass | `legacy-all-green.log` |
+| `security-regression.sh --component all` | 137 cases: Shell 24, Swift 105, Go race 8 | `security-candidate-verified.log` |
+| `security-gate-selftest.sh` | 10 mutation scenarios pass, including lowercase TAP and Swift skips | `selftest-candidate-verified.log` |
+| `run-ui-automation.sh` | Actual 13 XCUITest cases, 0 failures; no AX waiver | `ui-candidate-verified.log` |
+| `ATLAS_CODESIGN_IDENTITY=- package-native.sh` | Release build succeeds; ZIP/DMG/PKG generated | `package-verified.log` |
+| `verify-bundle-contents.sh` | Helper/XPC/plists and ad-hoc signature integrity pass | `bundle-verified.log` |
+| `make build release-arm64 release-amd64` | All CLI binaries and backend checksums built | `cli-assets-verified.log` |
+| `copy-gate.sh` | PASS; reported-only copy findings remain | `copy-verified.log` |
+| `export-readme-assets.sh` / `readme-media-gate.sh` | 11 assets rebuilt; six-dimensional gate PASS | `media-candidate-verified.log`, `media-verified.log` |
 
-## Acceptance pending
+A standalone UI repro also executed 1 test successfully (`ui-standalone-repro.log`). Earlier Atlas UI errors therefore were repaired, not classified as a shared automation blocker. Xcode 27 required explicit test product/module names, Debug testability, DEBUG definition and active architecture. Fixture state now survives first Worker load. The last UI run checks actual disabled execution/restore controls, explanatory accessibility elements, and the unknown-result request identifier/status banner. A final private-state App run exposed a Model/Worker repository mismatch in an older fixture test; all default Scaffold workers in App tests now use their test Model repository and remove their private directories at teardown. The full 63-case suite passed after this correction.
 
-VM PAM/real mount, UI, CI run and release installation evidence are pending. Capabilities requiring these remain closed until verified.
+Baseline package failures were recorded in `baseline-packages.log`; baseline CLI subset passed 46. New regressions recorded RED before fixes for C1 deletion/system/PAM boundaries, package-interior roots, invalid XPC deadlines and falsely recoverable ledger/report state (`C1-*-red.log`, `N1-*-red.log`, `R2-invalid-*-red.log`, `ledger-honesty-red.log`). A legacy 50-temp-file performance case failed during concurrent Xcode/SPM builds, passed alone and in the final full run; its timing threshold was not relaxed.
 
-C1 GREEN: 140 Bats cases, 0 failures (one legacy analyze-binary availability skip); all 14 new safety/parity cases executed. shellcheck and runtime parity passed. Obsolete positive tests for removed destructive capabilities were replaced by execution-side safety regressions; container tests now assert preservation instead of deletion.
+## Implemented boundaries and recovery
 
-Ruling: existing autofix suggestion test expected a low-disk message deliberately suppressed when a large-cache suggestion exists; corrected it to assert the actual cache suggestion, without changing production behavior.
+- C1: owned private scratch workspace and inode tracking; replaced temp objects preserved; root Shell code synchronized one-way by explicit 46-file manifest. Refused cleanup is not counted as cleaned. Homebrew cleanup/autoremove, arbitrary package-manager/Docker/Nix cleanup, simctl deletion, Time Machine deletion, database VACUUM, DNS/daemon/font/index/Dock changes and automatic optimize dispatch refuse before effects. Optimize reports zero applied changes and does not pre-authenticate sudo for unavailable tasks.
+- C2: isolated, no-follow `sudo_local` transaction library preserves the main sudo file and third-party rules, stages root:wheel/0444 before atomic replacement, fsyncs, stores private backup, rejects nonstandard objects and rolls back failed postcheck. Four isolated PAM tests pass. Production wrapper is closed; real root metadata/authentication/rollback are VM prerequisites.
+- C3: backend validates bounded JSON/scope/identity, refuses root or mismatched real/effective credentials, binds opened directories, refuses links/special files/mount boundaries, tracks partial/cancelled results and uses stable exit codes. Local matching-version assets require SHA-256. Same-UID final stat/unlink replacement remains a documented race; wrapper stays closed.
+- C4: launchd Program takes precedence over argv[0]; present/missing/unknown classification never unloads or deletes a service, including missing or unreadable candidates.
+- N1/N2: shared typed identities and per-action scopes; package ancestors and protected organizer roots rejected, including case variants. No-follow parent descriptors and same-volume no-replace rename; 100,000 scan and 1,000 mutation limits; canonical digest and exact nonempty unique selected IDs; bounded registry and persisted proof. Finder Trash is separately path-based and is not represented as atomically descriptor-bound.
+- N3/N4: framed checksummed sequence/transition-validated journal is authoritative; planned precedes movement, moved precedes success. ENOSPC/append/snapshot faults stop batches without discarding durable facts. Private no-follow storage rejects FIFO without blocking. Corrupt tails retain valid-prefix read-only inspection; future/corrupt snapshots are preserved. Schema 1 migration backs up before conversion. Two-worker lease covers file mutation and snapshot publication; bound lease checks directory identity; CAS refuses stale whole-state writes. Temporary busy saves remain failures for their own request, and read-only status remains accessible after snapshot failure.
+- N5: source identity, exact original target, durable restorePlanned/restored records and no-replace movement; same-name replacements never establish success. Only confirmed ENOENT is source missing; unreadable/substituted objects require reconciliation. Restore batch selections are durable and fixed per request; retries never resume unstarted items. Typed restore request IDs survive success and support status lookup. Expired and legacy unverified records remain visible, with no physical pruning.
+- N6: execution/restore unavailable reasons on screen; availability-aware timeline, filters, badges, metrics and exported report; no “recoverable” promise based only on expiry. Unknown transport outcomes query status without mutation replay, expose durable facts and keep pending execution disabled. No production fixture seeding.
+- R1/R2: owned process groups, concurrent bounded pipe drains, monotonic deadlines, cancellation, TERM/KILL and bounded reap. Helper/health/scan budgets 30/15/120 seconds; stdout/stderr 8/1 MiB; stdin 16 KiB. XPC exactly-once completion and independent reply deadline; read-only retry allowlist; mutating dispatch loss returns requestID/unknown outcome, never fallback/retry. Release ignores executable/repository environment overrides. Helper verifies whole action and journal/plan evidence and refuses unsupported privileged operations.
+- R3: actual critical-suite and per-package counts; failed, skipped, absent or unsupported output cannot pass. Zero/missing coverage emits NOT_RUN and exits nonzero. Gate uses a private state directory and XPC fallback tests also inject private repositories. Media export no longer kills unrelated Atlas processes or disables Chrome sandbox; uses an isolated profile, complete fresh PNG CRC/dimension validation, owned process group and deadline.
 
-## N1
+## Review and scope rulings
 
-RED: recursive package internals and direct package-interior roots reproduced. GREEN: scanner, smart-clean scope and shared FileSafety suites; Helper suite 3/3. Shared mover uses opened source-parent descriptors and no-replace rename. Deterministic ancestor replacement leaves the outside sentinel unchanged. Smart Clean narrows to cache/log descendants; services and generic ownership repair are unsupported.
+Independent final review found and drove fixes for external-tool bypasses, false cleaned/applied totals, euid checks, protected path case aliases, FIFO blocking, test-state isolation, skip parsers, restore request binding, unstarted status, stale snapshot publication and per-request busy errors. No confirmed Critical finding remained; final Important corrections were applied and verified. Review did not substitute for VM or release evidence.
 
-Ruling: permit only macOS's fixed /var, /tmp and /etc aliases in the descriptor walker; arbitrary symlinks remain rejected. Required because Foundation can retain /var in temporary paths whose final component did not exist at resolution time.
+Retained explicit user-confirmed firewall/Gatekeeper enabling and Rosetta installation are separate system changes, not automatic cleanup. Analyzer's explicitly selected Finder Trash action remains path-based, without the new native journal. Own Mole metadata-cache deletion also remains. No blanket claim that every repo command is read-only is made. README exporter still has a hand-copied shell; fingerprint/healthy media cannot prove equality with the real shell (existing AGENTS limitation).
 
-## N2 / N3 interim closure
+Rulings: retain ActionPlan presentation while adding typed execution selection to the protocol; permit only fixed macOS /var,/tmp,/etc aliases; legacy identity-free recovery stays unverified; preserve confirmed snapshot on rejected publication instead of guessing same-name restoration. Retire pre-journal positive destructive contracts after closing those capabilities, replacing them with refusal and real isolated journal/mover/fault tests. Strict-build baseline and UI fixture/configuration fixes restore coverage, without skipping tests.
 
-- Registered previews bind canonical SHA-256 digests to immutable file identities and entry references; controllers and AppModel forward the typed selection. Empty selections do not mean select-all. Removed UInt16 narrowing and unchecked preview byte sums.
-- Default server-side native file mutations (including restore) are closed, independently of UI or environment settings. They remain closed pending the journal/recovery/Helper acceptance closure and VM evidence.
-- Smart Clean now accumulates mappings immediately at each successful file. Removed legacy same-name restore success inference; legacy restore uses no-replace FileSafety mover.
-- Actual targeted verification: registry 4, mutation default-closure 1, protocol 5; scanner limit suite 29. `N2-integration.log` and `N2-final.log` in isolated worktree logs. This does not establish crash durability or reopen production writes.
+## CI and unverified acceptance
 
-## R1 bounded process lifecycle
+Observed origin `zchhaano/cleanmypc`: `gh run list --workflow atlas-acceptance.yml --limit 20` and release limit 10 returned empty arrays; workflows are configured but no new execution/run URL exists. Historical AGENTS success belongs to prior workflow evidence and is not a run of this candidate. New gate wiring must not be described as protection already verified in CI. Push/dispatch was not performed.
 
-Shared runner uses an owned posix_spawn process group, nonblocking stdin and simultaneous bounded stdout/stderr drains, monotonic deadlines, TERM then KILL, cancellation, and one continuation owner. Helper/Health/scan use 30/15/120 seconds, 1 second grace, 8/1 MiB limits. A child retaining pipes is bounded by the original deadline. Descendants deliberately escaping the process group are outside the guarantee. Scan scratch is removed on every return/error.
+VM scripts run in default checklist mode only. `--execute` requires a trusted root:0600 marker and explicit snapshot ID; they were not executed. Filesystem script does not synthesize mounted-volume evidence. macOS 14 runtime, Intel native Helper runtime, real sudo/PAM, mount races, real Direct/XPC end-to-end execution, real DMG/PKG installation, Developer ID/Gatekeeper acceptance and notarization are NOT RUN. Local app is universal; embedded Helper is arm64. Unsigned PKG/ad-hoc app are development artifacts only.
 
-Actual regression result: 6 process runner cases, 1 Helper client case, 21 adapter cases pass (`R1-integrated.log`). Normal exit/input, full simultaneous pipes, input refusal, ignored TERM, held descendant pipe, cancellation and per-stream output overflow exercised in isolated child processes. Helper client rejects responses whose complete action differs; Release ignores executable/repository environment overrides.
+### Test contract migration
+
+Retired 29 pre-journal positive/destructive scenarios after the accepted production feature closure. Replacement coverage is in `AtlasMutationAuthorizationTests`, `AtlasPartialMutationTests`, `AtlasRecoveryExecutorTests`, `AtlasRecoveryCrashTests` and the implemented fault-injection matrix. Fixtures are now explicitly seeded by test factories, never by production repository load. Retired scenarios: testExecuteAppUninstallRemovesAppAndCreatesRecoveryEntry, testExecuteAppUninstallRestorePhysicallyRestoresAppBundle, testExecuteAppUninstallSummaryMentionsReviewOnlyEvidenceGroupsWhenPresent, testExecutePlanDoesNotCreateRecoveryEntryWhenTargetIsAlreadyGone, testExecutePlanMovesSupportedFindingsIntoRecoveryWhileKeepingInspectionOnlyItems, testExecutePlanPreservesCompletedRecoveryEntriesWhenLaterFindingFailsInStateOnlyMode, testExecutePlanRejectsWhenFailClosedExecutionFailsBeforeAnySideEffect, testExecutePlanTrashesRealTargetsWhenAvailable, testExecutePlanUsesStructuredTargetPathsCarriedByCurrentPlan, testFileOrganizerExecuteHandlesDuplicateFilenames, testFileOrganizerExecutePlanMovesFilesAndCreatesRecoveryItem, testFileOrganizerExecutePlanRejectsStalePlanID, testFileOrganizerExecuteRejectsSystemDirDestinationViaHomeGuard, testFileOrganizerUndoRejectsExpiredRecoveryItem, testFileOrganizerUndoRestoresFilesToOriginalLocation, testInspectionOnlyPlanIsAcceptedWithoutMutatingState, testRestoreAppUsesPersistedUninstallEvidenceCountWhenAvailable, testRestoreItemsKeepsStateUnchangedWhenLaterHelperRestoreFails, testRestoreItemsMixedSummaryIncludesDiskAndStateOnlyClauses, testRestoreItemsRejectsExpiredRecoveryItemsAndPrunesThem, testRestoreItemsRejectsWhenDestinationAlreadyExists, testRestoreItemsStateOnlySummaryDoesNotClaimOnDiskRestore, testRestoreRecoveryItemPhysicallyRestoresRealTargets, testScanExecuteRescanRemovesExecutedContainerCacheTargetFromRealResults, testScanExecuteRescanRemovesExecutedGradleCacheTargetFromRealResults, testScanExecuteRescanRemovesExecutedPnpmStoreTargetFromRealResults, testScanExecuteRescanRemovesExecutedSwiftPMCacheTargetFromRealResults, testScanExecuteRescanRemovesExecutedTargetFromRealResults, testUnsupportedTargetIsDowngradedToInspectionAndDoesNotFailExecution.

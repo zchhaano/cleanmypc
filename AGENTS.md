@@ -19,7 +19,7 @@ xcodegen generate && open Atlas.xcodeproj                     # 生成 Xcode 工
 
 **测试边界（易踩）**：`./scripts/test.sh` 只跑遗留 Mole 的 shell/Go 套件（shellcheck + bats + go test + 安装测试），**不含任何 Swift 覆盖**。Swift 改动只能靠 `swift test` 验证，不要拿 `test.sh` 当代替。
 
-**README 媒体门禁**：README 截图有六维机检（存在性 / 尺寸 / 像素健康 / 引用完整性 / 漂移指纹 / 零孤儿），接在**三处**：`full-acceptance.sh` 第 [5/13] 步 · `atlas-acceptance.yml`（`paths:` 含媒体目录）· **`release.yml` 的 `native` job**（紧随版本号推导，在打包前 fail fast —— 发版正是截图最容易脱节的一刻）。
+**README 媒体门禁**：README 截图有六维机检（存在性 / 尺寸 / 像素健康 / 引用完整性 / 漂移指纹 / 零孤儿），接在**三处**：`full-acceptance.sh` 第 [6/14] 步 · `atlas-acceptance.yml`（`paths:` 含媒体目录）· **`release.yml` 的 `native` job**（紧随版本号推导，在打包前 fail fast —— 发版正是截图最容易脱节的一刻）。
 
 判据源是 `Docs/design/2026-09-15-readme-media-lifecycle.md`。**报红的解药永远是一条命令**：`./scripts/atlas/export-readme-assets.sh`（本机跑，同时重渲 8 张双语截图、图标与封面 `fig01-cover.png`，并重建 `manifest.json`）。
 
@@ -32,7 +32,7 @@ xcodegen generate && open Atlas.xcodeproj                     # 生成 Xcode 工
 
 守卫本身的变异自检：`./scripts/atlas/readme-media-gate-selftest.sh` —— 15 条变异逐维验红。它在**临时副本**上做变异（`--root` 指过去），真实工作树一次都不碰，因此可以任意并发。改门禁规则后**必须**重跑。
 
-**文案门禁**：改 `Localizable.strings` 后跑 `./scripts/atlas/copy-gate.sh`（已接入 `full-acceptance.sh` 第 [4/13] 步）。判据源是 `Docs/COPY_GUIDELINES.md`，**不是**建议。十条规则里八条阻断（C1 术语禁用表 / C2 副标题超宽 / C3 副标题规格句式 / C4 术语映射不一致 / C6 占位符对称 / C7 键集合 parity / C9 Swift 字面量残留 / C10 解析完整性），两条只报告（C5 孤儿键归 `ATL-272` / C8 长句）——清单以 `copy_gate.py` 的 `BLOCKING` / `REPORTED` 常量为准。**退出码 2 = 文案源缺失，不是通过。**
+**文案门禁**：改 `Localizable.strings` 后跑 `./scripts/atlas/copy-gate.sh`（已接入 `full-acceptance.sh` 第 [5/14] 步）。判据源是 `Docs/COPY_GUIDELINES.md`，**不是**建议。十条规则里八条阻断（C1 术语禁用表 / C2 副标题超宽 / C3 副标题规格句式 / C4 术语映射不一致 / C6 占位符对称 / C7 键集合 parity / C9 Swift 字面量残留 / C10 解析完整性），两条只报告（C5 孤儿键归 `ATL-272` / C8 长句）——清单以 `copy_gate.py` 的 `BLOCKING` / `REPORTED` 常量为准。**退出码 2 = 文案源缺失，不是通过。**
 
 **UI 门禁（易踩）**：`./scripts/atlas/run-ui-automation.sh` 在 AX 未授权时**仍** `exit 0`（退出码本身看不出跳过），但现在会同时发出**机器可读哨兵** `ATLAS_UI_GATE=NOT_RUN`；`full-acceptance.sh` 只认哨兵、**不认那句人类可读英文**（匹配文案的话，改一个词就会静默退回假绿）。
 
@@ -46,14 +46,14 @@ xcodegen generate && open Atlas.xcodeproj                     # 生成 Xcode 工
 
 失败时 log 分别留存在 `${TMPDIR}/atlas-ui-automation-{NOT-RUN,BLOCKED,ZERO-TESTS}.log`。裁定原文见 `Docs/design/2026-09-14-ux-friction-remediation.md` §9；加固过程见 `changes/CHG-2026-09-ux-friction-review-remediation/`。
 
-> ⚠️ **CI 影响（易踩，已裁定）**：`.github/workflows/atlas-acceptance.yml` 直接跑 `full-acceptance.sh`，而 GitHub 托管 runner 没有 Accessibility 授权 ⇒ 必然走跳过路径 ⇒ 第 [11/13] 步失败 ⇒ **job 红**。
+> ⚠️ **CI 影响（易踩，已裁定）**：`.github/workflows/atlas-acceptance.yml` 直接跑 `full-acceptance.sh`，而 GitHub 托管 runner 没有 Accessibility 授权 ⇒ 必然走跳过路径 ⇒ 第 [12/14] 步失败 ⇒ **job 红**。
 >
 > **裁定（2026-09-15）**：该 workflow 的 acceptance 步骤已设 `env: ATLAS_ALLOW_UI_SKIP: "1"`，CI 因此在「本机无 AX」这一条上放行。
 >
 > **关键区分**（别把它当万能开关）：该变量**只**豁免两条**环境限制**路径（AX 未授权 / atlas 与 repro 双 timeout）。它**不**豁免「`xcodebuild` 收集到 0 个用例」——那是配置缺陷，**CI 里照样红**。即：CI 接受「这台 runner 没有 AX」，不接受「UI 用例根本没跑起来」。
 >
 > 🔴 **反证（2026-09-15，勿删）**：上面那句「必然走跳过路径」**是推断，不是观测**，且已被证伪。
-> `atlas-acceptance.yml` 自建立起**从未成功过**（20+ 次全红，全部卡在第 [1/13] 步），所以第 [11/13] 步的行为**从来没有人见过**。
+> `atlas-acceptance.yml` 自建立起**从未成功过**（20+ 次全红，全部卡在第 [1/13] 步），所以当时第 [11/13] 步的行为**从来没有人见过**。
 > 修好 [1/13]/[2/13] 后的首次成功运行（`#34984224153`，Xcode 26.6 / `macos-latest`）显示：
 > `AtlasAppUITests` **真的跑了并通过** —— `Executed 11 tests, with 0 failures` · `** TEST SUCCEEDED **`。
 > 即：**该 runner 有 Accessibility 授权**，`ATLAS_ALLOW_UI_SKIP=1` 自设立起一直是空转的。
@@ -81,3 +81,9 @@ xcodegen generate && open Atlas.xcodeproj                     # 生成 Xcode 工
 ## Attribution
 
 部分构建于开源 Mole 项目（MIT）。发版涉及上游派生代码时，同步更新 `Docs/ATTRIBUTION.md` 与 `Docs/THIRD_PARTY_NOTICES.md`。
+
+## 安全回归（2026-10-04）
+
+`./scripts/atlas/security-regression.sh --component all` 位于 full acceptance 第 [4/14] 步，分别核对非零 Shell/Swift/Go 用例计数；`security-gate-selftest.sh` 在临时副本中验红。运行 CLI 套件需要 Bats、shellcheck 和 Go，缺失硬失败。测试安装目录必须为本次 mktemp 私有目录。
+
+原生文件变更、PAM 和通用 CLI 删除保持关闭；不能用环境变量开启。能力重开所需证据见 `Docs/security/2026-10-01-release-acceptance.md`。`full-acceptance.sh` 含 `/Applications` 安装操作，日常主机只运行独立安全阶段。UI 自动化使用工作树自己的 DerivedData，不按进程名终止其他 App/测试进程。

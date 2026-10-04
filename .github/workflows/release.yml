@@ -30,6 +30,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install security test dependencies
+        run: brew install bats-core shellcheck
+      - name: Verify CLI safety before building artifacts
+        run: |
+          ./scripts/atlas/security-regression.sh --component shell
+          ./scripts/atlas/security-regression.sh --component go
+
       - name: Build Binaries
         run: |
           make ${{ matrix.target }}
@@ -40,10 +47,10 @@ jobs:
           cd bin
           # Package binaries into tar.gz for Homebrew resource
           if [[ "${{ matrix.target }}" == "release-arm64" ]]; then
-            tar -czf binaries-darwin-arm64.tar.gz analyze-darwin-arm64 status-darwin-arm64
+            tar -czf binaries-darwin-arm64.tar.gz analyze-darwin-arm64 status-darwin-arm64 safe-remove-darwin-arm64 safe-remove-darwin-arm64.sha256
             ls -lh binaries-darwin-arm64.tar.gz
           else
-            tar -czf binaries-darwin-amd64.tar.gz analyze-darwin-amd64 status-darwin-amd64
+            tar -czf binaries-darwin-amd64.tar.gz analyze-darwin-amd64 status-darwin-amd64 safe-remove-darwin-amd64 safe-remove-darwin-amd64.sha256
             ls -lh binaries-darwin-amd64.tar.gz
           fi
 
@@ -65,7 +72,13 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v4
 
       - name: Install xcodegen
-        run: brew install xcodegen
+        run: brew install xcodegen bats-core shellcheck
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Verify native security before packaging
+        run: ./scripts/atlas/security-regression.sh --component all
 
       - name: Derive native release version
         run: |
@@ -206,6 +219,7 @@ jobs:
           subject-path: |
             bin/analyze-darwin-*
             bin/status-darwin-*
+            bin/safe-remove-darwin-*
             bin/binaries-darwin-*.tar.gz
             bin/Atlas-for-Mac.zip
             bin/Atlas-for-Mac.dmg

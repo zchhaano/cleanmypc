@@ -1,5 +1,8 @@
 # Native File Safety and Recovery Implementation Plan
 
+> 实施更新（2026-10-04）：代码已落地；已执行的隔离/本地验证和未执行的 VM/发布验证见 [最终验收表](../security/2026-10-01-release-acceptance.md)。关闭能力候选不代表完整功能重开。下列原始任务判据保留，涉及实际 VM、架构运行安装或新 CI URL 的步骤仍待验收。
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 防止原生整理破坏文件包，使每个已发生的文件变更有证据，恢复成功不依赖同名猜测。

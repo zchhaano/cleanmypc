@@ -10,8 +10,13 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$PROJECT_ROOT"
 
-# shellcheck source=lib/core/file_ops.sh
-source "$PROJECT_ROOT/lib/core/file_ops.sh"
+for tool in shellcheck bats go; do
+    command -v "$tool" >/dev/null 2>&1 || { echo "MOLE_TESTS=NOT_RUN missing=$tool" >&2; exit 2; }
+done
+
+# Test reporting must not source runtime initialization or export its session state.
+GREEN=$'\033[0;32m'; RED=$'\033[0;31m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
+ICON_SUCCESS='✓'; ICON_ERROR='✗'; ICON_WARNING='!'
 
 echo "==============================="
 echo "Mole Test Runner"
@@ -25,7 +30,7 @@ report_unit_result() {
         printf "${GREEN}${ICON_SUCCESS} Unit tests passed${NC}\n"
     else
         printf "${RED}${ICON_ERROR} Unit tests failed${NC}\n"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 }
 
@@ -40,7 +45,7 @@ if command -v shellcheck > /dev/null 2>&1; then
             printf "${GREEN}${ICON_SUCCESS} Test script lint passed${NC}\n"
         else
             printf "${RED}${ICON_ERROR} Test script lint failed${NC}\n"
-            ((FAILED++))
+            FAILED=$((FAILED + 1))
         fi
     else
         printf "${YELLOW}${ICON_WARNING} No test scripts found, skipping${NC}\n"
@@ -158,7 +163,7 @@ if command -v go > /dev/null 2>&1; then
         printf "${GREEN}${ICON_SUCCESS} Go tests passed${NC}\n"
     else
         printf "${RED}${ICON_ERROR} Go tests failed${NC}\n"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 else
     printf "${YELLOW}${ICON_WARNING} Go not installed, skipping Go tests${NC}\n"
@@ -170,7 +175,7 @@ if bash -c 'source lib/core/common.sh && echo "OK"' > /dev/null 2>&1; then
     printf "${GREEN}${ICON_SUCCESS} Module loading passed${NC}\n"
 else
     printf "${RED}${ICON_ERROR} Module loading failed${NC}\n"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 echo ""
 
@@ -180,42 +185,31 @@ if bash -n mole && bash -n bin/clean.sh && bash -n bin/optimize.sh; then
     printf "${GREEN}${ICON_SUCCESS} Integration tests passed${NC}\n"
 else
     printf "${RED}${ICON_ERROR} Integration tests failed${NC}\n"
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 echo ""
 
 echo "6. Testing installation..."
-# Skip if Homebrew mole is installed (install.sh will refuse to overwrite)
-install_test_home=""
-if command -v brew > /dev/null 2>&1 && brew list mole &> /dev/null; then
-    printf "${GREEN}${ICON_SUCCESS} Installation test skipped, Homebrew${NC}\n"
-else
-    install_test_home="$(mktemp -d /tmp/mole-test-home.XXXXXX 2> /dev/null || true)"
-    if [[ -z "$install_test_home" ]]; then
-        install_test_home="/tmp/mole-test-home"
-        mkdir -p "$install_test_home"
-    fi
-fi
-if [[ -z "$install_test_home" ]]; then
-    :
-elif HOME="$install_test_home" \
+# Install only inside a unique test-owned directory, never a shared /tmp prefix.
+install_test_root="$(mktemp -d "${TMPDIR:-/tmp}/atlas-install-test.XXXXXX")"
+trap 'rm -rf -- "$install_test_root"' EXIT
+install_test_home="$install_test_root/home"
+install_test_prefix="$install_test_root/prefix"
+mkdir -p "$install_test_home"
+if HOME="$install_test_home" \
     XDG_CONFIG_HOME="$install_test_home/.config" \
     XDG_CACHE_HOME="$install_test_home/.cache" \
     MO_NO_OPLOG=1 \
-    ./install.sh --prefix /tmp/mole-test > /dev/null 2>&1; then
-    if [ -f /tmp/mole-test/mole ]; then
+    ./install.sh --prefix "$install_test_prefix" > /dev/null 2>&1; then
+    if [ -f "$install_test_prefix/mole" ]; then
         printf "${GREEN}${ICON_SUCCESS} Installation test passed${NC}\n"
     else
         printf "${RED}${ICON_ERROR} Installation test failed${NC}\n"
-        ((FAILED++))
+        FAILED=$((FAILED + 1))
     fi
 else
     printf "${RED}${ICON_ERROR} Installation test failed${NC}\n"
-    ((FAILED++))
-fi
-MO_NO_OPLOG=1 safe_remove "/tmp/mole-test" true || true
-if [[ -n "$install_test_home" ]]; then
-    MO_NO_OPLOG=1 safe_remove "$install_test_home" true || true
+    FAILED=$((FAILED + 1))
 fi
 echo ""
 

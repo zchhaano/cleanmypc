@@ -83,24 +83,29 @@ run_ui_acceptance() {
     return 1
 }
 
-echo "[1/13] Shared package tests"
+swift build --package-path Testing --product AtlasRecoveryCrashHarness
+
+echo "[1/14] Shared package tests"
 swift test --package-path Packages
 
-echo "[2/13] App package tests"
+echo "[2/14] App package tests"
 swift test --package-path Apps
 
-echo "[3/13] Worker and helper builds"
+echo "[3/14] Worker and helper builds"
 swift build --package-path XPC
 swift test --package-path Helpers
 swift build --package-path Testing
 
-echo "[4/13] Copy gate (L10n 文案判据)"
+echo "[4/14] Security regression gate"
+./scripts/atlas/security-regression.sh --component all
+
+echo "[5/14] Copy gate (L10n 文案判据)"
 # 判据源：Docs/COPY_GUIDELINES.md §6/§9 · REQ-copy-plain-language 的 terminology-baseline.md
 # 阻断维全零才通过；报告维（孤儿键 / 长句）打印但不参与判定。
 # 注意：NOT_RUN（文案源缺失）返回 2，**不是通过** —— 见 copy-gate.sh 的退出码语义。
 ./scripts/atlas/copy-gate.sh
 
-echo "[5/13] README media assets gate (截图 判据)"
+echo "[6/14] README media assets gate (截图 判据)"
 # 判据源：Docs/design/2026-09-15-readme-media-lifecycle.md
 # 六维：存在性 / 尺寸 / 像素健康 / 引用完整性 / 漂移指纹 / 零孤儿。
 # 纯 Python + 纯标准库，可移植，CI runner 上照样跑。
@@ -108,29 +113,29 @@ echo "[5/13] README media assets gate (截图 判据)"
 # 报红时的解药是**一条命令**：./scripts/atlas/export-readme-assets.sh
 ./scripts/atlas/readme-media-gate.sh
 
-echo "[6/13] Fixture automation scripts"
+echo "[7/14] Fixture automation scripts"
 bash -n ./scripts/atlas/smart-clean-manual-fixtures.sh
 bash -n ./scripts/atlas/apps-manual-fixtures.sh
 bash -n ./scripts/atlas/apps-evidence-acceptance.sh
 
-echo "[7/13] Native packaging"
+echo "[8/14] Native packaging"
 ./scripts/atlas/package-native.sh
 
-echo "[8/13] Bundle structure verification"
+echo "[9/14] Bundle structure verification"
 ./scripts/atlas/verify-bundle-contents.sh
 
-echo "[9/13] DMG install verification"
+echo "[10/14] DMG install verification"
 KEEP_INSTALLED_APP=1 ./scripts/atlas/verify-dmg-install.sh
 
-echo "[10/13] Installed app launch smoke"
+echo "[11/14] Installed app launch smoke"
 ./scripts/atlas/verify-app-launch.sh
 
-echo "[11/13] Native UI automation"
+echo "[12/14] Native UI automation"
 run_ui_acceptance
 
-echo "[12/13] Signing preflight"
+echo "[13/14] Signing preflight"
 ./scripts/atlas/signing-preflight.sh || true
 
-echo "[13/13] Acceptance summary"
+echo "[14/14] Acceptance summary"
 echo "Artifacts available in dist/native"
 ls -lah dist/native

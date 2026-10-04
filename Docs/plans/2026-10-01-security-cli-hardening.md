@@ -1,5 +1,8 @@
 # CLI System Safety Implementation Plan
 
+> 实施更新（2026-10-04）：代码已落地；已执行的隔离/本地验证和未执行的 VM/发布验证见 [最终验收表](../security/2026-10-01-release-acceptance.md)。关闭能力候选不代表完整功能重开。下列原始任务判据保留，涉及实际 VM、架构运行安装或新 CI URL 的步骤仍待验收。
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 消除遗留 CLI 对 PAM、系统状态、服务、废纸篓和越界文件的默认破坏风险。

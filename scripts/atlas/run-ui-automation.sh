@@ -17,14 +17,12 @@ if ! ./scripts/atlas/ui-automation-preflight.sh > /dev/null; then
 fi
 
 run_once() {
-    pkill -f 'Atlas for Mac.app/Contents/MacOS/Atlas for Mac' > /dev/null 2>&1 || true
-    pkill -f 'AtlasAppUITests-Runner|XCTRunner|xcodebuild test -project Atlas.xcodeproj -scheme AtlasApp' > /dev/null 2>&1 || true
-    sleep 2
 
     xcodegen generate > /dev/null
     xcodebuild test \
         -project Atlas.xcodeproj \
         -scheme AtlasApp \
+        -derivedDataPath "$ROOT_DIR/.build/atlas-ui/DerivedData" \
         -destination 'platform=macOS' \
         -only-testing:AtlasAppUITests
 }
