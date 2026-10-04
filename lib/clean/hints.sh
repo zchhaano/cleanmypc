@@ -61,7 +61,7 @@ record_project_artifact_hint() {
     PROJECT_ARTIFACT_HINT_COUNT=$((PROJECT_ARTIFACT_HINT_COUNT + 1))
 
     if [[ ${#PROJECT_ARTIFACT_HINT_EXAMPLES[@]} -lt 2 ]]; then
-        PROJECT_ARTIFACT_HINT_EXAMPLES+=("${path/#$HOME/~}")
+        PROJECT_ARTIFACT_HINT_EXAMPLES+=("${path/#"$HOME"/\~}")
     fi
 
     local sample_max=3
@@ -282,7 +282,7 @@ show_system_data_hint_notice() {
             if [[ "$size_kb" -ge "$threshold_kb" ]]; then
                 clue_labels+=("${labels[$i]}")
                 clue_sizes+=("$size_kb")
-                clue_paths+=("${path/#$HOME/~}")
+                clue_paths+=("${path/#"$HOME"/\~}")
                 if [[ ${#clue_labels[@]} -ge $max_hits ]]; then
                     break
                 fi

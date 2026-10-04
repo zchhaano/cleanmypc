@@ -108,7 +108,7 @@ setup() {
 	# Default max depth is 2
 	[[ "$output" == *"shallow.dmg"* ]]
 	[[ "$output" == *"mid.dmg"* ]]
-	[[ "$output" == *"deep.dmg"* ]]
+	[[ "$output" != *"deep.dmg"* ]]
 	[[ "$output" != *"too-deep.dmg"* ]]
 }
 

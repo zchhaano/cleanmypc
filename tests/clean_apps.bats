@@ -438,6 +438,7 @@ PLIST
 
 run_with_timeout() { shift; "$@"; }
 
+classify_launch_item "$tmp_plist"
 if is_launch_item_orphaned "$tmp_plist"; then
     echo "orphan"
 fi
@@ -446,7 +447,8 @@ rm -rf "$tmp_dir"
 EOF
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"orphan"* ]]
+    [[ "$output" == *"unknown"* ]]
+    [[ "$output" != *"orphan"* ]]
 }
 
 @test "is_launch_item_orphaned protects when program exists" {

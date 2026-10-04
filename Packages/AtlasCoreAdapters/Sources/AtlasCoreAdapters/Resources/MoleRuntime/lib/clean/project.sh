@@ -116,7 +116,7 @@ EOF
     printf '\n' >> "$PURGE_CONFIG_FILE"
     for path in "${paths[@]}"; do
         # Convert $HOME to ~ for portability
-        path="${path/#$HOME/~}"
+        path="${path/#"$HOME"/\~}"
         echo "$path" >> "$PURGE_CONFIG_FILE"
     done
 }
@@ -1098,7 +1098,7 @@ clean_project_artifacts() {
         fi
 
         # Convert to ~ format for cleaner display
-        result="${result/#$HOME/~}"
+        result="${result/#"$HOME"/\~}"
         echo "$result"
     }
 

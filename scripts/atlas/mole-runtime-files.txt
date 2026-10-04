@@ -42,3 +42,5 @@ lib/ui/menu_paginated.sh
 lib/ui/menu_simple.sh
 lib/uninstall/batch.sh
 lib/uninstall/brew.sh
+lib/manage/pam_transaction.sh
+lib/manage/pam_transaction.py

@@ -31,3 +31,7 @@ Add all additional third-party libraries, bundled binaries, or copied source com
 ## Atlas safety changes (2026-10-01)
 
 Mole-derived Shell components are modified to disable automatic PAM changes, privileged deletion, system update/service removal, network/Bluetooth resets and Trash emptying. Ordinary cache deletion requires Atlas's confined backend. Original MIT attribution remains applicable.
+
+### Atlas hardening additions (2026-10-04)
+
+Atlas's PAM transaction, confined Go cache backend, file-object validation, journal and bounded process lifecycle do not add third-party dependencies. Mole-derived Shell safety behavior and synchronized runtime copies differ from upstream; original MIT notices are retained. Existing Go dependencies and their notices continue to apply.

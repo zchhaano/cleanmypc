@@ -145,7 +145,9 @@ setup() {
 
     [ "$elapsed" -lt 1000 ]
 
-    [ "${#MOLE_TEMP_FILES[@]}" -eq 50 ]
+    local count
+    count=$(find "$MOLE_OWNED_TEMP_ROOT" -name '*.atlas-identity' | wc -l | tr -d ' ')
+    [ "$count" -eq 50 ]
 
     start=$(date +%s%N)
     cleanup_temp_files
@@ -154,7 +156,7 @@ setup() {
     elapsed=$(( (end - start) / 1000000 ))
     [ "$elapsed" -lt 2000 ]
 
-    [ "${#MOLE_TEMP_FILES[@]}" -eq 0 ]
+    [ ! -e "$MOLE_OWNED_TEMP_ROOT" ]
 }
 
 @test "mktemp_file creates files with correct prefix" {

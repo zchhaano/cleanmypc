@@ -602,12 +602,14 @@ cleanup_owned_temp() {
     rm -rf -- "$path"
 }
 cleanup_temp_files() {
-    stop_inline_spinner || true
-    local i
-    for ((i=0; i<${#MOLE_TEMP_FILES[@]}; i++)); do
+    if declare -F stop_inline_spinner >/dev/null; then stop_inline_spinner || true; fi
+    local i file_count=0 dir_count=0
+    if [[ -n "${MOLE_TEMP_FILES[0]:-}" ]]; then file_count=${#MOLE_TEMP_FILES[@]}; fi
+    if [[ -n "${MOLE_TEMP_DIRS[0]:-}" ]]; then dir_count=${#MOLE_TEMP_DIRS[@]}; fi
+    for ((i=0; i<file_count; i++)); do
         cleanup_owned_temp "${MOLE_TEMP_FILES[$i]}" "${MOLE_TEMP_FILE_IDENTITIES[$i]}" || true
     done
-    for ((i=0; i<${#MOLE_TEMP_DIRS[@]}; i++)); do
+    for ((i=0; i<dir_count; i++)); do
         cleanup_owned_temp "${MOLE_TEMP_DIRS[$i]}" "${MOLE_TEMP_DIR_IDENTITIES[$i]}" || true
     done
     MOLE_TEMP_FILES=() MOLE_TEMP_DIRS=()

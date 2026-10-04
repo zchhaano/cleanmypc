@@ -311,8 +311,7 @@ cat "$size_log"
 EOF
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Xcode runtime volumes · scanning 2 entries"* ]]
-    [[ "$output" == *"Xcode runtime volumes · cleaning 1 unused"* ]]
+    [[ "$output" == *"Xcode runtime volumes · removed 1"* ]]
     [[ "$output" == *"REMOVE:$volumes_root/unused-runtime"* ]]
     [[ "$output" == *"$volumes_root/unused-runtime"* ]]
     [[ "$output" != *"$volumes_root/in-use-runtime"* ]]

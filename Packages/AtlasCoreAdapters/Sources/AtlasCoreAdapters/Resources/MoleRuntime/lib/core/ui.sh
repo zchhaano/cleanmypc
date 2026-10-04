@@ -268,6 +268,7 @@ drain_pending_input() {
         drained=$((drained + 1))
         [[ $drained -gt 100 ]] && break
     done
+    return 0
 }
 
 # Format menu option display

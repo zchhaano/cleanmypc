@@ -508,6 +508,29 @@ build_binary_from_source() {
     return 1
 }
 
+# This project's backend is never downloaded from the upstream Mole release URL.
+# A source-only install remains read-only. Version-matched packaged artifacts require a checksum.
+install_safe_remove_backend() {
+    local arch artifact checksum
+    case "$(uname -m)" in arm64) arch=arm64 ;; x86_64) arch=amd64 ;; *) return 0 ;; esac
+    artifact="$SOURCE_DIR/bin/safe-remove-darwin-$arch"
+    checksum="$artifact.sha256"
+    if [[ ! -f "$artifact" || ! -f "$checksum" || -L "$artifact" || -L "$checksum" ]]; then
+        log_info "Confined cache backend absent; cache writes remain unavailable."
+        return 0
+    fi
+    local expected actual
+    expected=$(awk 'NR == 1 { print $1 }' "$checksum")
+    actual=$(shasum -a 256 "$artifact" | awk '{ print $1 }')
+    if [[ ! "$expected" =~ ^[[:xdigit:]]{64}$ || "$actual" != "$expected" ]]; then
+        log_error "Cache backend checksum mismatch; refusing installation."
+        return 1
+    fi
+    maybe_sudo cp "$artifact" "$CONFIG_DIR/bin/safe-remove-go.new" || return 1
+    maybe_sudo chmod 755 "$CONFIG_DIR/bin/safe-remove-go.new" || return 1
+    maybe_sudo mv "$CONFIG_DIR/bin/safe-remove-go.new" "$CONFIG_DIR/bin/safe-remove-go" || return 1
+}
+
 download_binary() {
     local binary_name="$1"
     local target_path="$CONFIG_DIR/bin/${binary_name}-go"
@@ -620,7 +643,10 @@ install_files() {
         else
             local -a bin_files=("$SOURCE_DIR/bin"/*)
             if [[ ${#bin_files[@]} -gt 0 ]]; then
-                cp -r "${bin_files[@]}" "$CONFIG_DIR/bin/"
+                for file in "${bin_files[@]}"; do
+                    case "${file##*/}" in safe-remove*) continue ;; esac
+                    cp -r "$file" "$CONFIG_DIR/bin/" || return 1
+                done
                 for file in "$CONFIG_DIR/bin/"*; do
                     [[ -e "$file" ]] && chmod +x "$file"
                 done
@@ -658,6 +684,8 @@ install_files() {
     if [[ "$source_dir_abs" != "$install_dir_abs" ]]; then
         maybe_sudo sed -i '' "s|SCRIPT_DIR=.*|SCRIPT_DIR=\"$CONFIG_DIR\"|" "$INSTALL_DIR/mole"
     fi
+
+    install_safe_remove_backend || return 1
 
     if ! download_binary "analyze"; then
         exit 1

@@ -115,9 +115,10 @@ total_items=0
 total_size_cleaned=0
 
 # Simulate 'Enter' for confirmation
-printf '\n' | batch_uninstall_applications > /dev/null 2>&1
+if printf '\n' | batch_uninstall_applications > /dev/null 2>&1; then exit 99; fi
 
-grep -q "uninstall --cask --zap brew-app-cask" "$HOME/brew_calls.log"
+[[ ! -e "$HOME/brew_calls.log" ]]
+[[ -d "$HOME/Applications/BrewApp.app" ]]
 EOF
 
     [ "$status" -eq 0 ]
@@ -163,10 +164,10 @@ files_cleaned=0
 total_items=0
 total_size_cleaned=0
 
-printf '\n' | batch_uninstall_applications > /dev/null 2>&1
+if printf '\n' | batch_uninstall_applications > /dev/null 2>&1; then exit 99; fi
 
-grep -q "BREW_CALL:uninstall --cask --zap brew-preauth-cask" "$HOME/order.log"
-! grep -q "UNEXPECTED_ENSURE_SUDO:" "$HOME/order.log"
+[[ ! -e "$HOME/order.log" ]]
+:
 EOF
 
     [ "$status" -eq 0 ]
@@ -208,7 +209,7 @@ files_cleaned=0
 total_items=0
 total_size_cleaned=0
 
-printf '\n' | batch_uninstall_applications
+if printf '\n' | batch_uninstall_applications; then exit 99; fi
 
 sleep 0.2
 
@@ -220,7 +221,7 @@ fi
 EOF
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"TIMEOUT_CALL:30:brew autoremove"* ]]
+    [[ "$output" == *"NO_TIMEOUT_CALL"* ]]
     [[ "$output" != *"Checking brew dependencies"* ]]
 }
 

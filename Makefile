@@ -16,6 +16,7 @@ STATUS := status
 # Source directories
 ANALYZE_SRC := ./cmd/analyze
 STATUS_SRC := ./cmd/status
+SAFE_REMOVE_SRC := ./cmd/safe-remove
 
 # Build flags
 LDFLAGS := -s -w
@@ -41,17 +42,23 @@ build: mod-download
 	@echo "Building for local architecture..."
 	$(GO) build -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(ANALYZE)-go $(ANALYZE_SRC)
 	$(GO) build -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(STATUS)-go $(STATUS_SRC)
+	CGO_ENABLED=0 $(GO) build -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/safe-remove-go $(SAFE_REMOVE_SRC)
+	cd $(BIN_DIR) && shasum -a 256 safe-remove-go > safe-remove-go.sha256
 
 # Release build targets (run on native architectures for CGO support)
 release-amd64: mod-download
 	@echo "Building release binaries (amd64)..."
 	GOOS=darwin GOARCH=amd64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(ANALYZE)-darwin-amd64 $(ANALYZE_SRC)
 	GOOS=darwin GOARCH=amd64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(STATUS)-darwin-amd64 $(STATUS_SRC)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/safe-remove-darwin-amd64 $(SAFE_REMOVE_SRC)
+	cd $(BIN_DIR) && shasum -a 256 safe-remove-darwin-amd64 > safe-remove-darwin-amd64.sha256
 
 release-arm64: mod-download
 	@echo "Building release binaries (arm64)..."
 	GOOS=darwin GOARCH=arm64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(ANALYZE)-darwin-arm64 $(ANALYZE_SRC)
 	GOOS=darwin GOARCH=arm64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/$(STATUS)-darwin-arm64 $(STATUS_SRC)
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -ldflags="$(LDFLAGS)" -o $(BIN_DIR)/safe-remove-darwin-arm64 $(SAFE_REMOVE_SRC)
+	cd $(BIN_DIR) && shasum -a 256 safe-remove-darwin-arm64 > safe-remove-darwin-arm64.sha256
 
 clean:
 	@echo "Cleaning binaries..."

@@ -407,15 +407,25 @@ clean_orphaned_system_services() {
 
 # Extract program path from plist (supports both ProgramArguments and Program)
 _extract_program_path() {
-    local plist="$1"
-    local program=""
-
-    program=$(plutil -extract ProgramArguments.0 raw "$plist" 2> /dev/null)
+    local plist="$1" program=""
+    # Program is the executable; argv[0] may intentionally be a different label.
+    program=$(plutil -extract Program raw "$plist" 2>/dev/null) || program=""
     if [[ -z "$program" ]]; then
-        program=$(plutil -extract Program raw "$plist" 2> /dev/null)
+        program=$(plutil -extract ProgramArguments.0 raw "$plist" 2>/dev/null) || program=""
     fi
+    printf '%s\n' "$program"
+}
 
-    echo "$program"
+classify_launch_item() {
+    local program
+    program=$(_extract_program_path "$1")
+    if [[ "$program" != /* ]]; then printf '%s\n' unknown; return 0; fi
+    if [[ -e "$program" ]]; then printf '%s\n' present; return 0; fi
+    # Permission/context failures must not become evidence of an orphan.
+    local parent="${program%/*}"
+    [[ -n "$parent" ]] || parent="/"
+    if [[ ! -r "$parent" || ! -x "$parent" ]]; then printf '%s\n' unknown; return 0; fi
+    printf '%s\n' missing
 }
 
 # Extract associated bundle identifier from plist
@@ -440,79 +450,8 @@ _extract_associated_bundle() {
 # Check if a LaunchAgent/LaunchDaemon is orphaned using multi-layer verification
 # Returns 0 if orphaned, 1 if not orphaned
 is_launch_item_orphaned() {
-    local plist="$1"
-
-    # Layer 1: Check if program path exists
-    local program=$(_extract_program_path "$plist")
-
-    # No program path - skip (not a standard launch item)
-    [[ -z "$program" ]] && return 1
-
-    # Program exists -> not orphaned
-    [[ -e "$program" ]] && return 1
-
-    # Layer 2: Check AssociatedBundleIdentifiers
-    local associated=$(_extract_associated_bundle "$plist")
-    if [[ -n "$associated" ]]; then
-        # Check if associated app exists via mdfind
-        if run_with_timeout 2 mdfind "kMDItemCFBundleIdentifier == '$associated'" 2> /dev/null | head -1 | grep -q .; then
-            return 1 # Associated app found -> not orphaned
-        fi
-
-        # Extract vendor name from bundle ID (com.vendor.app -> vendor)
-        local vendor=$(echo "$associated" | cut -d'.' -f2)
-        if [[ -n "$vendor" ]] && [[ ${#vendor} -ge 3 ]]; then
-            # Check if any app from this vendor exists
-            if find /Applications ~/Applications -maxdepth 2 -iname "*${vendor}*" -type d 2> /dev/null | grep -iq "\.app"; then
-                return 1 # Vendor app exists -> not orphaned
-            fi
-        fi
-    fi
-
-    # Layer 3: Check Application Support directory activity
-    if [[ "$program" =~ /Library/Application\ Support/([^/]+)/ ]]; then
-        local app_support_name="${BASH_REMATCH[1]}"
-
-        # Check both user and system Application Support
-        for base in "$HOME/Library/Application Support" "/Library/Application Support"; do
-            local support_path="$base/$app_support_name"
-            if [[ -d "$support_path" ]]; then
-                # Check if there are files modified in last 7 days (active usage)
-                local recent_file=$(find "$support_path" -type f -mtime -7 2> /dev/null | head -1)
-                if [[ -n "$recent_file" ]]; then
-                    return 1 # Active Application Support -> not orphaned
-                fi
-            fi
-        done
-    fi
-
-    # Layer 4: Check if app name from program path exists
-    if [[ "$program" =~ /Applications/([^/]+)\.app/ ]]; then
-        local app_name="${BASH_REMATCH[1]}"
-        # Look for apps with similar names (case-insensitive)
-        if find /Applications ~/Applications -maxdepth 2 -iname "*${app_name}*" -type d 2> /dev/null | grep -iq "\.app"; then
-            return 1 # Similar app exists -> not orphaned
-        fi
-    fi
-
-    # Layer 5: PrivilegedHelper special handling
-    if [[ "$program" =~ ^/Library/PrivilegedHelperTools/ ]]; then
-        local filename=$(basename "$plist")
-        local bundle_id="${filename%.plist}"
-
-        # Extract app hint from bundle ID (com.vendor.app.helper -> vendor)
-        local app_hint=$(echo "$bundle_id" | sed 's/com\.//; s/\..*helper.*//')
-
-        if [[ -n "$app_hint" ]] && [[ ${#app_hint} -ge 3 ]]; then
-            # Look for main app
-            if find /Applications ~/Applications -maxdepth 2 -iname "*${app_hint}*" -type d 2> /dev/null | grep -iq "\.app"; then
-                return 1 # Helper's main app exists -> not orphaned
-            fi
-        fi
-    fi
-
-    # All checks failed -> likely orphaned
-    return 0
+    # A missing executable alone does not authorize unloading or deletion.
+    return 1
 }
 
 # Clean orphaned user-level LaunchAgents

@@ -35,7 +35,7 @@ update_via_homebrew() {
     temp_upgrade=$(mktemp_file "brew_upgrade")
 
     # Set up trap for interruption (Ctrl+C) with inline cleanup
-    trap 'stop_inline_spinner 2>/dev/null; safe_remove "$temp_update" true; safe_remove "$temp_upgrade" true; echo ""; exit 130' INT TERM
+    trap 'stop_inline_spinner 2>/dev/null; cleanup_owned_temp "$temp_update" "$(cat "$temp_update.atlas-identity")"; cleanup_owned_temp "$temp_upgrade" "$(cat "$temp_upgrade.atlas-identity")"; echo ""; exit 130' INT TERM
 
     # Update Homebrew
     if [[ -t 1 ]]; then
@@ -74,8 +74,8 @@ update_via_homebrew() {
     trap - INT TERM
 
     # Cleanup temp files
-    safe_remove "$temp_update" true
-    safe_remove "$temp_upgrade" true
+    cleanup_owned_temp "$temp_update" "$(cat "$temp_update.atlas-identity")"
+    cleanup_owned_temp "$temp_upgrade" "$(cat "$temp_upgrade.atlas-identity")"
 
     if echo "$upgrade_output" | grep -q "already installed"; then
         local installed_version

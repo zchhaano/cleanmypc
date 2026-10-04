@@ -148,3 +148,10 @@ dist/
 .worktrees/
 .security-key
 logs/security/
+
+# Generated confined cache backend release assets
+/bin/safe-remove-go*
+/bin/safe-remove-darwin-*
+
+# Python regression tooling caches
+__pycache__/

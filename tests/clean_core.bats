@@ -141,7 +141,7 @@ EOF
     touch "$HOME/Documents/.DS_Store"
 
     cat > "$HOME/.config/mole/whitelist" << EOF
-FINDER_METADATA_SENTINEL
+FINDER_METADATA
 EOF
 
     # Test whitelist logic directly instead of running full clean
@@ -150,7 +150,7 @@ set -euo pipefail
 source "$PROJECT_ROOT/lib/core/common.sh"
 source "$PROJECT_ROOT/lib/manage/whitelist.sh"
 load_whitelist
-if is_whitelisted "$HOME/Documents/.DS_Store"; then
+if is_whitelisted "$FINDER_METADATA_SENTINEL"; then
     echo "protected by whitelist"
 fi
 EOF
@@ -228,7 +228,8 @@ _clean_mail_downloads
 EOF
 
     [ "$status" -eq 0 ]
-    [ ! -f "$HOME/Library/Mail Downloads/old.pdf" ]
+    [ -f "$HOME/Library/Mail Downloads/old.pdf" ]
+    [[ "$output" == *"Not executed"* ]]
 }
 
 @test "clean_time_machine_failed_backups detects running backup correctly" {

@@ -30,3 +30,5 @@ If upstream-derived code is shipped, keep the copyright notice and MIT license t
 ## Atlas safety changes (2026-10-01)
 
 Mole-derived Shell components are modified to disable automatic PAM changes, privileged deletion, system update/service removal, network/Bluetooth resets and Trash emptying. Ordinary cache deletion requires Atlas's confined backend. Original MIT attribution remains applicable.
+
+The confined Go cache backend, PAM transaction module, journal and process runner are Atlas additions. Embedded Mole runtime parity is checked against the source manifest. Original Mole license/copyright and notices remain in distribution; no new third-party dependencies were added.
